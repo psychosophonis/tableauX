@@ -11,7 +11,7 @@ import SwiftUI
 /// `Window` (not `WindowGroup`) because there is exactly one setup window: a
 /// WindowGroup would let ⌘N open a second one editing the same show.
 @main
-struct MultiscreenPlayerApp: App {
+struct TableauXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
 

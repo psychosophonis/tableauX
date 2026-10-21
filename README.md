@@ -1,4 +1,4 @@
-# Multiscreen Player
+# tableauX
 
 A macOS app that plays one video per display, in sync, at each display's own
 resolution. Built for gallery and lab screen arrays (first use: the BCM116 lab,
@@ -11,12 +11,14 @@ huge video across a virtual display resamples the picture and leaves artefacts.
   same scheduled instant; a check once a second pulls back any display that
   drifts more than a frame.
 - Seamless looping, Fit or Fill per display, audio on/off per display.
-- Shows save to `.msshow` files and can play automatically when the app opens.
+- Shows save to `.tableaux` files and can play automatically when the app
+  opens. (Shows saved as `.msshow` by the earlier "Multiscreen Player" builds
+  still open.)
 
 ## Download
 
-Get the latest `MultiscreenPlayer-<version>.zip` from the
-[Releases page](../../releases), unzip it, and move **Multiscreen Player** to
+Get the latest `tableauX-<version>.zip` from the
+[Releases page](../../releases), unzip it, and move **tableauX** to
 Applications. It runs on Apple silicon and Intel Macs, macOS 13 or later.
 
 ### First launch
@@ -25,7 +27,7 @@ The app isn't notarised by Apple, so macOS blocks it the first time:
 
 1. Double-click it; macOS says it can't be opened. Click **Done**.
 2. Open **System Settings → Privacy & Security**, scroll down, and click
-   **Open Anyway** next to "Multiscreen Player was blocked".
+   **Open Anyway** next to "tableauX was blocked".
 3. Confirm. After this it opens normally.
 
 ## Use

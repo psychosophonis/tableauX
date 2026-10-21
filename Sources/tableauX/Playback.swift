@@ -110,7 +110,7 @@ final class Playback {
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
                                     IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                                    "Multiscreen Player is playing" as CFString, &sleepAssertion)
+                                    "tableauX is playing" as CFString, &sleepAssertion)
 
         for (window, config) in built {
             guard let path = config.file else {

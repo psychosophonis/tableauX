@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds "Multiscreen Player.app" and a zip of it to hand out (GitHub release).
+# Builds "tableauX.app" and a zip of it to hand out (GitHub release).
 #
 # `swift build` makes a bare executable. A Mac app is a BUNDLE: a folder with a
 # fixed layout (Contents/MacOS/<binary>, Contents/Info.plist) that Finder shows
@@ -16,19 +16,19 @@
 # Security → Open Anyway (see README.md).
 #
 # Usage: scripts/make-app.sh [version]     e.g. scripts/make-app.sh 0.1.0
-# Output: dist/Multiscreen Player.app and dist/MultiscreenPlayer-<version>.zip
+# Output: dist/tableauX.app and dist/tableauX-<version>.zip
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 version="${1:-0.0.0}"
-name="Multiscreen Player"
+name="tableauX"                 # app name, binary name and process name
 app="dist/${name}.app"
 
 swift build -c release --arch arm64 --arch x86_64
-bin=".build/apple/Products/Release/MultiscreenPlayer"
+bin=".build/apple/Products/Release/${name}"
 
 rm -rf dist && mkdir -p "${app}/Contents/MacOS"
-cp "$bin" "${app}/Contents/MacOS/MultiscreenPlayer"
+cp "$bin" "${app}/Contents/MacOS/${name}"
 cat > "${app}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -36,8 +36,8 @@ cat > "${app}/Contents/Info.plist" <<EOF
 <dict>
   <key>CFBundleName</key>               <string>${name}</string>
   <key>CFBundleDisplayName</key>        <string>${name}</string>
-  <key>CFBundleIdentifier</key>         <string>com.psychosophonis.tableau</string>
-  <key>CFBundleExecutable</key>         <string>MultiscreenPlayer</string>
+  <key>CFBundleIdentifier</key>         <string>com.psychosophonis.tableaux</string>
+  <key>CFBundleExecutable</key>         <string>${name}</string>
   <key>CFBundlePackageType</key>        <string>APPL</string>
   <key>CFBundleShortVersionString</key> <string>${version}</string>
   <key>CFBundleVersion</key>            <string>${version}</string>
@@ -49,6 +49,6 @@ EOF
 
 codesign --force --sign - "$app"
 # ditto, not zip: it keeps the bundle's metadata and code signature intact.
-ditto -c -k --keepParent "$app" "dist/MultiscreenPlayer-${version}.zip"
-echo "built ${app} ($(lipo -archs "${app}/Contents/MacOS/MultiscreenPlayer"))"
-echo "zipped dist/MultiscreenPlayer-${version}.zip"
+ditto -c -k --keepParent "$app" "dist/${name}-${version}.zip"
+echo "built ${app} ($(lipo -archs "${app}/Contents/MacOS/${name}"))"
+echo "zipped dist/${name}-${version}.zip"

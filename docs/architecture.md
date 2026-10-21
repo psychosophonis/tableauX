@@ -5,7 +5,7 @@ here. Update it BEFORE you change behaviour, then make the code follow.
 
 ## Purpose
 
-A macOS app that plays one video file per display, in sync, for a gallery or
+tableauX: a macOS app that plays one video file per display, in sync, for a gallery or
 lab screen array (BCM116: a Mac mini driving three 4K displays). It replaces
 "one huge file stretched across a virtual display", which resamples the image
 and produces artefacts.
@@ -30,7 +30,7 @@ blending, routing audio to particular output devices, playlists, editing.
 Displays are numbered 1..N left to right by their position in macOS's display
 arrangement (frame origin x, then y for ties). Panel *n* plays on display *n*.
 
-### Show file (`.msshow`, JSON)
+### Show file (`.tableaux`, JSON; Open also accepts the earlier `.msshow`)
 
 ```
 Show {

@@ -6,11 +6,13 @@ import PackageDescription
 // can check it without a screen. The app target is the thin shell that turns
 // that logic into windows and players.
 let package = Package(
-    name: "MultiscreenPlayer",
+    name: "tableauX",
     platforms: [.macOS(.v13)],
     targets: [
         .target(name: "PlayerCore"),
-        .executableTarget(name: "MultiscreenPlayer", dependencies: ["PlayerCore"]),
+        // The executable target's name is the binary's name, and so the process
+        // name macOS shows and logs under.
+        .executableTarget(name: "tableauX", dependencies: ["PlayerCore"]),
         .testTarget(name: "PlayerCoreTests", dependencies: ["PlayerCore"]),
     ]
 )

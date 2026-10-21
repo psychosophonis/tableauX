@@ -163,9 +163,16 @@ final class AppModel: ObservableObject {
 
     // MARK: Show files
 
+    /// Show files are `.tableaux`. Open also accepts `.msshow`, the extension
+    /// from before the app was renamed: the contents are the same format (the
+    /// version number inside is what ShowFile checks), so only the name moved.
+    static let showExtension = "tableaux"
+    static let legacyShowExtension = "msshow"
+
     func openDialog() {
         let p = NSOpenPanel()
-        p.allowedContentTypes = [UTType(filenameExtension: "msshow") ?? .json]
+        p.allowedContentTypes = [Self.showExtension, Self.legacyShowExtension]
+            .compactMap { UTType(filenameExtension: $0) }
         if p.runModal() == .OK, let url = p.url { open(url) }
     }
 
@@ -183,8 +190,10 @@ final class AppModel: ObservableObject {
 
     func saveDialog() {
         let p = NSSavePanel()
-        p.allowedContentTypes = [UTType(filenameExtension: "msshow") ?? .json]
-        p.nameFieldStringValue = showPath?.lastPathComponent ?? "Untitled.msshow"
+        p.allowedContentTypes = [UTType(filenameExtension: Self.showExtension) ?? .json]
+        // Saving an old .msshow offers the same name with the new extension.
+        let base = showPath?.deletingPathExtension().lastPathComponent ?? "Untitled"
+        p.nameFieldStringValue = "\(base).\(Self.showExtension)"
         guard p.runModal() == .OK, let url = p.url else { return }
         do {
             try ShowFile.encode(show).write(to: url)
@@ -229,7 +238,7 @@ final class AppModel: ObservableObject {
 
     func stop() { playback?.stop() }
 
-    static let setupTitle = "Multiscreen Player"
+    static let setupTitle = "tableauX"
     private var setupWindows: [NSWindow] {
         NSApp.windows.filter { !($0 is PanelWindow) && $0.title == Self.setupTitle }
     }

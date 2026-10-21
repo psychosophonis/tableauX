@@ -36,7 +36,7 @@ first version** (not a sync spike first).
   `swiftc -O proofs/sync-probe.swift -o .build/sync-probe`).
 - `Sources/PlayerCore/*` + `Tests/PlayerCoreTests/PlayerCoreTests.swift`:
   compile; 15/15 tests pass.
-- `Sources/MultiscreenPlayer/AppModel.swift`, `Playback.swift`: compile, and
+- `Sources/tableauX/AppModel.swift`, `Playback.swift`: compile, and
   playback has run once (2026-10-21, dev MacBook + LG 4K, Mat's two 30 s
   3840 × 2160 ProRes 422 10-bit files): Play → start scheduled in 0.69 s,
   8 s of playback, no resyncs. Short run; not a T2/T4 result.
@@ -91,7 +91,12 @@ first version** (not a sync spike first).
 - v2 (several videos per display, sync groups/offsets/nudge): spec DRAFT in
   docs/architecture.md, awaiting Mat's confirmation of the ▸ decisions.
 
-### Release 0.1.0 (2026-10-21) — github.com/psychosophonis/tableau
+### Release 0.1.1 (2026-10-21): renamed to tableauX
+App, binary, process, package and repo renamed (github.com/psychosophonis/
+tableauX; the old /tableau URL redirects). Show files are `.tableaux`; Open
+still accepts `.msshow`. `PlayerCore` and the local folder keep their names.
+
+### Release 0.1.0 (2026-10-21), published as "Multiscreen Player"
 - Review bug 2 fixed: `SyncMath.resumedStart` clamps a pause to the start, so
   Space in the first second resumes from frame 0 (tested); Space is ignored
   until the start is scheduled.

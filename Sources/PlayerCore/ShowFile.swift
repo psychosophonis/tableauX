@@ -27,7 +27,7 @@ public enum ShowFileError: Error, Equatable {
     case unsupportedVersion(Int)
 }
 
-/// Reading and writing `.msshow` files (JSON).
+/// Reading and writing show files (`.tableaux`, formerly `.msshow`; JSON).
 ///
 /// The file carries a VERSION NUMBER from day one. A show saved by a later
 /// version of the app may mean something this version doesn't understand, and

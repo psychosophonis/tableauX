@@ -1,4 +1,4 @@
-# Lab test: Multiscreen Player on the BCM116 Mac mini
+# Lab test: tableauX on the BCM116 Mac mini
 
 Two things can only be tested on the real three-display array. This sheet is
 for whoever runs them. It takes about 30 minutes. Please send the results
@@ -34,8 +34,8 @@ The app needs **macOS 13 or later**.
 
 ## 2. Install
 
-Download `MultiscreenPlayer-<version>.zip` and `sweep-test-clips-3840x2160.zip`
-from the GitHub release page and unzip both. Move **Multiscreen Player** to
+Download `tableauX-<version>.zip` and `sweep-test-clips-3840x2160.zip`
+from the GitHub release page and unzip both. Move **tableauX** to
 Applications. The first time it opens, see README.md → "First launch".
 
 ## 3. Test T6: are the displays in step?
@@ -43,7 +43,7 @@ Applications. The first time it opens, see README.md → "First launch".
 The sweep clips show a white line that runs across all three displays as if
 they were one wide screen, plus a frame number on each.
 
-1. Open Multiscreen Player. Choose `panel1…` for display 1, `panel2…` for
+1. Open tableauX. Choose `panel1…` for display 1, `panel2…` for
    display 2 and `panel3…` for display 3. Fit, audio off.
 2. Press **Play**.
 3. **Watch the gaps between displays.** In sync, the line leaves one display
@@ -77,10 +77,10 @@ Use Mat's real 4K exports (he'll say which files), one per display.
 3. Press **Esc**, then open **Terminal** and run:
 
    ```
-   log show --last 15m --predicate 'process == "MultiscreenPlayer"' > ~/Desktop/multiscreen-log.txt
+   log show --last 15m --predicate 'process == "tableauX"' > ~/Desktop/tableauX-log.txt
    ```
 
-   Send `multiscreen-log.txt` from the Desktop. The lines to look for:
+   Send `tableauX-log.txt` from the Desktop. The lines to look for:
    `start +…` (how long starting took) and `panel resynced` (a display drifted
    more than one frame and was pulled back; a few is fine, many is not).
 
