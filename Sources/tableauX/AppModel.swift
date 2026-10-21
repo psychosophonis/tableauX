@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import PlayerCore
+import SystemConfiguration
 import UniformTypeIdentifiers
 
 /// What setup needs to show about a chosen file.
@@ -18,12 +19,24 @@ struct MediaInfo: Equatable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var displays: [DisplayInfo] = []
-    @Published var show = Show(panels: [])
+    @Published var show = Show(machines: [Machine(name: AppModel.thisMac)])
     @Published private(set) var media: [String: MediaInfo] = [:]     // keyed by file path
     @Published private(set) var unreadable: Set<String> = []
     @Published private(set) var showPath: URL?
     @Published private(set) var isPlaying = false
     @Published var lastError: String?
+
+    /// [claude] This Mac's computer name, which picks its part of the show
+    /// (§ Show file › which machine). Read through SystemConfiguration rather
+    /// than `Host.current().localizedName`, which can stall on a network name
+    /// lookup; this is the name set in System Settings, read locally.
+    static let thisMac = SCDynamicStoreCopyComputerName(nil, nil) as String? ?? ProcessInfo.processInfo.hostName
+
+    /// Which of the show's machines this Mac plays; nil = the show has no part for it.
+    var machineIndex: Int? { show.machineIndex(named: Self.thisMac) }
+
+    /// This Mac's panels, in display order. Empty when the show has no part for it.
+    var panels: [PanelConfig] { machineIndex.map { show.machines[$0].panels } ?? [] }
 
     private var playback: Playback?
     private let lastShowKey = "lastShowPath"
@@ -63,7 +76,8 @@ final class AppModel: ObservableObject {
         displays = DisplayOrder.sorted(NSScreen.screens.compactMap(Self.info(for:)))
         // One panel per display. Extra panels from a show made on a bigger array
         // are kept (not deleted) so saving on this machine doesn't lose them.
-        while show.panels.count < displays.count { show.panels.append(PanelConfig()) }
+        guard let mi = machineIndex else { return }
+        while show.machines[mi].panels.count < displays.count { show.machines[mi].panels.append(PanelConfig()) }
     }
 
     private func screensChanged() {
@@ -103,12 +117,14 @@ final class AppModel: ObservableObject {
     func choose(panel i: Int) {
         let p = NSOpenPanel()
         p.allowedContentTypes = [.movie]
-        guard p.runModal() == .OK, let url = p.url else { return }
-        show.panels[i].file = url.path
+        guard p.runModal() == .OK, let url = p.url, let mi = machineIndex else { return }
+        show.machines[mi].panels[i].file = url.path
         loadInfo(url.path)
     }
 
-    func clear(panel i: Int) { show.panels[i].file = nil }
+    func clear(panel i: Int) {
+        if let mi = machineIndex { show.machines[mi].panels[i].file = nil }
+    }
 
     private func loadInfo(_ path: String) {
         guard media[path] == nil else { return }
@@ -143,7 +159,11 @@ final class AppModel: ObservableObject {
     /// warning (lengths that differ, so panels will drift in phase).
     var problems: (blocking: [String], warnings: [String]) {
         var blocking: [String] = [], warnings: [String] = []
-        let active = Array(show.panels.prefix(displays.count).enumerated())
+        if machineIndex == nil {
+            let names = show.machines.map(\.name).joined(separator: ", ")
+            return (["This show has parts for \(names), but not for this Mac (\(Self.thisMac))."], [])
+        }
+        let active = Array(panels.prefix(displays.count).enumerated())
         for (i, p) in active {
             guard let f = p.file else { continue }
             if !fileExists(f) { blocking.append("Panel \(i + 1): file not found (\(f)).") }
@@ -155,8 +175,8 @@ final class AppModel: ObservableObject {
            hi - lo > 1 / (lengths.map(\.fps).max() ?? 30) {
             warnings.append(String(format: "Lengths differ (%.2f s to %.2f s). Each panel loops on its own length, so they'll drift apart in phase.", lo, hi))
         }
-        if show.panels.count > displays.count {
-            warnings.append("This show has \(show.panels.count) panels but \(displays.count) display(s) are connected. The extra panels won't play.")
+        if panels.count > displays.count {
+            warnings.append("This show has \(panels.count) panels but \(displays.count) display(s) are connected. The extra panels won't play.")
         }
         return (blocking, warnings)
     }
@@ -182,7 +202,8 @@ final class AppModel: ObservableObject {
             showPath = url
             UserDefaults.standard.set(url.path, forKey: lastShowKey)
             refreshDisplays()
-            show.panels.compactMap(\.file).filter(fileExists).forEach(loadInfo)
+            // Only this Mac's files: the other machines' paths are on their disks.
+            panels.compactMap(\.file).filter(fileExists).forEach(loadInfo)
         } catch {
             lastError = "Couldn't open \(url.lastPathComponent): \(error)"
         }
@@ -210,18 +231,18 @@ final class AppModel: ObservableObject {
         // [claude] Say why a Play does nothing. Before this, a refused Play was
         // a silent return, which is exactly what "nothing happened" looks like.
         NSLog("Play pressed: %d display(s), files: %@", displays.count,
-              show.panels.prefix(displays.count).map { $0.file.map { ($0 as NSString).lastPathComponent } ?? "-" }.joined(separator: ", "))
+              panels.prefix(displays.count).map { $0.file.map { ($0 as NSString).lastPathComponent } ?? "-" }.joined(separator: ", "))
         if isPlaying { NSLog("Play refused: already playing"); return }
         let blocking = problems.blocking
         if !blocking.isEmpty { NSLog("Play refused: %@", blocking.joined(separator: " | ")); return }
         let screens = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { s in
             Self.info(for: s).map { ($0.id, s) }
         })
-        let assignments = zip(displays, show.panels).compactMap { d, p in screens[d.id].map { ($0, p) } }
+        let assignments = zip(displays, panels).compactMap { d, p in screens[d.id].map { ($0, p) } }
         lastError = nil
         // The setup window is hidden only once the panel windows are up, never
         // before: hiding the last visible window quits the app (see Playback.init).
-        let pb = Playback(assignments: assignments,
+        let pb = Playback(assignments: assignments, sync: show.sync,
                           onWindowsUp: { [weak self] in self?.setupWindows.forEach { $0.orderOut(nil) } },
                           onEnd: { [weak self] in self?.playbackEnded() })
         playback = pb

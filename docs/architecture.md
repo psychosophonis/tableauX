@@ -20,7 +20,7 @@ output devices, playlists, editing.
 |---|--------|-------------------|
 | T1 | Panels start within 1 frame (33 ms at 30 fps) of each other | `proofs/sync-probe.swift`, timebase skew at start |
 | T2 | Equal-length panels stay within 1 frame across 100+ loops | `proofs/sync-probe.swift`, max skew over the run |
-| T3 | A panel more than 1 frame out is pulled back within 2 s | `SyncMathTests` (decision); lab run (behaviour) |
+| T3 | A panel more than `sync.tolerance` frames out is pulled back within `sync.grace` + 2 s (default 3 frames, 5 s; with 1 frame, 0 s this is v1's "1 frame, 2 s") | `SyncMathTests` (decision); lab run (behaviour) |
 | T4 | 3 × 4K H.264 at 30 fps decodes with no dropped frames on Apple silicon | `proofs/sync-probe.swift --4k` here; lab run on the Mac mini |
 | T5 | Each panel's pixels map to its display with no stretching (aspect kept) | `PlacementTests` |
 | T6 | Display-to-display presentation offset is invisible on a sweep-line test | Lab only: `scripts/make-test-media.sh` clips on the array. Nothing on a one-display Mac can test this. |
@@ -35,9 +35,18 @@ arrangement (frame origin x, then y for ties). Panel *n* plays on display *n*.
 
 ```
 Show {
-  version: 1
-  panels: [Panel]            // index = display number - 1
+  version: 2
+  machines: [Machine]        // at least one; one per Mac the show plays on (v3)
+  sync: Sync
   playOnLaunch: bool         // reopen this show and play when the app starts
+}
+Machine {
+  name: string               // the Mac's computer name (System Settings › General › About)
+  panels: [Panel]            // index = display number on that Mac - 1
+}
+Sync {
+  tolerance: int             // frames, ≥ 1; default 3 (see § Sync › Drift check)
+  grace: number              // seconds, ≥ 0; default 5
 }
 Panel {
   file: string | null        // absolute path; null = panel stays black
@@ -46,8 +55,18 @@ Panel {
 }
 ```
 
-Errors: unknown version → refuse to open; missing file → panel shown as
-missing in setup, playback refused until fixed or cleared.
+<!-- [claude] Version 2 replaced version 1 on 2026-10-21 (v3 Stage 1b). Mat:
+no real shows exist yet, so version 1 files are refused, not converted. -->
+
+Which machine this Mac plays: the one whose `name` is this Mac's computer
+name; if none matches and the show has exactly one machine, that one (a show
+made on another Mac still opens and plays); otherwise none, and setup says the
+show has no part for this Mac and refuses Play. A new show has one machine,
+named after this Mac.
+
+Errors: a version other than 2 → refuse to open; no machines, tolerance < 1
+or grace < 0 → refuse to open; missing file → panel shown as missing in setup,
+playback refused until fixed or cleared.
 
 ### Scaling
 The video is scaled uniformly (same factor on both axes) to the display's
@@ -64,8 +83,13 @@ A 1920 × 1080 file on a 3840 × 2160 display is exactly 2×.
 - Start: preroll every player, then call `setRate(1, time: .zero, atHostTime: h0)`
   on each with the same `h0 = now + 1 s`.
 - Drift check every 1 s: read each panel's time at a common host time via its
-  item timebase; if |actual − expected| > 1 frame, re-sync that panel with
-  `setRate(1, time: expected(h1), atHostTime: h1)` for `h1 = now + 0.5 s`.
+  item timebase. A panel is OUT when |actual − expected| > `sync.tolerance`
+  frames (of that panel's video). A panel that has been out at every check for
+  `sync.grace` seconds, or has stalled (rate 0), is re-synced with
+  `setRate(1, time: expected(h1), atHostTime: h1)` for `h1 = now + 0.5 s`. A
+  check that finds it back in tolerance restarts the grace period. Grace exists
+  because a seek is a visible jump, and a passing error (a network blip, v3)
+  may not be worth one. `tolerance 1, grace 0` is the v1 rule exactly.
 - Pause/resume pauses and restarts all panels together from a shared host time.
 - Panels of different lengths loop independently on their own durations (they
   drift in phase on purpose). Setup warns when lengths differ by > 1 frame.
@@ -74,7 +98,8 @@ A 1920 × 1080 file on a 3840 × 2160 display is exactly 2×.
 
 - Setup window: one row per detected display (number, name, resolution), each
   with Choose file / Clear, Audio on/off, Fit/Fill, and the file's resolution
-  and duration. Buttons: Open, Save, Play. Checkbox: Play on launch.
+  and duration. Buttons: Open, Save, Play. Checkbox: Play on launch. Fields:
+  Sync tolerance (frames) and Grace (seconds).
 - Playback: a borderless window covering each display above the menu bar,
   black background, cursor hidden, display sleep prevented.
   Keys: Space pause/resume, Esc stop and return to setup.
@@ -94,7 +119,7 @@ the decisions marked ▸ are Claude's proposals. -->
 ### Model
 ```
 Show {
-  version: 2
+  version: next              // [claude] was 2; v3's machines format took 2
   displays: [DisplayLayout]  // index = display number - 1
   groups: [Group]            // at least one; "main" by default
   playOnLaunch: bool
@@ -114,9 +139,10 @@ Group { id: string, name: string }
   the app: a 1920 × 1080 video in a 1920 × 1080 rect is exactly 1×. The cost: a
   show is tied to the displays' resolutions, so setup warns when a rect runs
   off its display, and blocks a rect of zero size.
-- A v1 file opens as v2: each panel becomes one full-display video in group
-  "main" with offset 0. Saving writes v2. (v1 readers refuse v2 files, by the
-  existing version rule.)
+- A file of the previous version opens in this one: each panel becomes one
+  full-display video in group "main" with offset 0. Saving writes the new
+  version. (Older readers refuse it, by the existing version rule.) [claude]
+  Written before v3; machines (v3) must carry through to this format.
 
 ### Sync
 - One player per video, all on the host clock, as now.
@@ -173,15 +199,19 @@ well before T and network delay doesn't affect the start.
   with the SHORTEST round trip are the accurate ones: keep a window of recent
   samples and use the minimum-round-trip one (Cristian's algorithm with
   min-RTT filtering). Re-estimate continuously, several times a second.
-- Two Macs' clocks also run at slightly different rates (tens of parts per
-  million: roughly a frame every 15–30 min), so the offset is tracked over
-  time, not measured once.
-- Small corrections slew: a player that's a little off plays at a rate just
-  off 1.0 until it's back (MultiScreener's approach, invisible). Large errors
-  (> 1 frame after slewing, or after a dropout) resync with a seek, as now.
-  Bands (implemented in `SyncMath.correction`, not yet used by the
-  app): error under ¼ frame, nothing; up to 1 frame, slew to close it over
-  2 s, rate change capped at ±0.5%; over 1 frame, resync (v1's T3 unchanged).
+- Two Macs' clocks also run at slightly different rates (parts per million:
+  measured −12 ppm between Mat's MacBooks, a frame every ~46 min), so the
+  offset is tracked over time, not measured once.
+- Correction: players use the same drift check as one Mac (§ Sync), with the
+  show's tolerance and grace, against conductor time. Mat (2026-10-21): the
+  default tolerance of 3 frames is enough for most works, and frame accuracy
+  is not needed all the time.
+- Slew (deferred): a player a little off could play at a rate just off 1.0
+  until it's back (MultiScreener's approach) instead of seeking. Built and
+  tested in `SyncMath.correction` (under ¼ frame nothing; up to 1 frame slew
+  over 2 s, capped at ±0.5%; over, seek), but not used by the app: with a
+  tolerance of whole frames, a seek after the grace period is enough. Kept for
+  a work that needs sub-frame smoothness.
 - Sample rate matters: `proofs/clock-probe.swift` with simulated one-sided
   noise of 0–50 ms kept the filtered estimate within 1.1 ms at 20 exchanges/s
   but not at 2/s (11.7 ms, fail). Players exchange at 20/s (UDP packets of
@@ -231,8 +261,8 @@ SyncMath.correction(error:frame:) -> .none | .slew(rate:) | .resync
 |---|--------|-------------------|
 | T10 | Two Macs can reach each other over the target network | `ping` / probe handshake on the real Wi-Fi: first, because nothing else matters if this fails |
 | T11 | Player's clock-offset estimate steady to within 5 ms (95% of samples) | probe on two Macs on the target network. This measures steadiness only: with no third clock to compare against, a steady but WRONG estimate would pass. Accuracy is T12's job. |
-| T12 | Panels on different Macs within 1 frame on the sweep-line test | `make-test-media.sh` clips across two Macs, photographed (as T6) |
-| T13 | A 30 s network dropout causes no visible desync | sweep-line test with Wi-Fi switched off and on mid-run |
+| T12 | Panels on different Macs within `sync.tolerance` (Mat, 2026-10-21: default 3 frames, 100 ms at 30 fps); also run once at 1 frame to learn what a tight work can expect | `make-test-media.sh` clips across two Macs, photographed (as T6) |
+| T13 | During and after a 30 s network dropout, panels on different Macs are back within `sync.tolerance` within `sync.grace` + 2 s (default 5 s + 2 s); brief errors in between are acceptable | sweep-line test with Wi-Fi switched off and on mid-run |
 
 ### Riskiest assumption, and its cheapest test
 That the target network gives clock estimates good to a few milliseconds.
@@ -254,9 +284,11 @@ dropout. Steadiness is shown; accuracy (T12) is not yet.
 DisplayOrder.sorted([DisplayInfo]) -> [DisplayInfo]
 Placement.rect(video: CGSize, in: CGRect, scaling: Scaling) -> CGRect
 SyncMath.expected(host: Double, start: Double, duration: Double) -> Double
-SyncMath.needsCorrection(actual:expected:duration:frame:) -> Bool   // wrap-aware
+SyncMath.needsCorrection(actual:expected:duration:frame:tolerance:) -> Bool   // wrap-aware; tolerance in frames
 SyncMath.repeats(duration: Double, cover: Double) -> Int
+DriftGate(grace:).check(out: Bool, now: Double) -> Bool                 // true = resync now
 ShowFile.decode(Data) throws -> Show ; ShowFile.encode(Show) -> Data
+Show.machineIndex(named: String) -> Int?                                // § Show file › which machine
 ```
 
 ## Verification
@@ -265,6 +297,7 @@ ShowFile.decode(Data) throws -> Show ; ShowFile.encode(Show) -> Data
 swift build && swift test
 ```
 
-Tests: `DisplayOrderTests`, `PlacementTests`, `SyncMathTests`, `ShowFileTests`.
+Tests: `DisplayOrderTests`, `PlacementTests`, `SyncMathTests`, `ShowFileTests`,
+`NetworkClockTests`, `ClockReplayTests` (the real Wi-Fi recording).
 Probes: `proofs/sync-probe.swift` (T1, T2, T4 on this machine).
 Lab checklist (T4 on the Mac mini, T6): `docs/LAB-TEST.md`.

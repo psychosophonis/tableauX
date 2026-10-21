@@ -23,9 +23,11 @@ private final class LivePanel {
     let itemDuration: Double        // the whole repeated item, not one clip
     let frame: Double               // one frame, in seconds
     var corrections = 0
+    var gate: DriftGate             // [claude] the grace period, per panel (§ Sync)
 
-    init(window: PanelWindow, player: AVPlayer?, itemDuration: Double, frame: Double) {
+    init(window: PanelWindow, player: AVPlayer?, itemDuration: Double, frame: Double, grace: Double) {
         self.window = window; self.player = player; self.itemDuration = itemDuration; self.frame = frame
+        self.gate = DriftGate(grace: grace)
     }
 }
 
@@ -41,9 +43,11 @@ private final class LivePanel {
 ///  3. Each item is the clip repeated end to end, so looping is a continuous
 ///     stream with no seek at the loop point.
 ///  4. Once a second a CLOSED-LOOP CHECK compares each panel with where the
-///     shared clock says it should be, and re-syncs any panel more than a frame
-///     out. Steps 1–3 should make this rare; the check catches what they don't,
-///     such as a stall or a capped item running out.
+///     shared clock says it should be, and re-syncs any panel that has been
+///     more than the show's tolerance out for its grace period (default 3
+///     frames, 5 s; a stalled panel at once). Steps 1–3 should make this rare;
+///     the check catches what they don't, such as a stall or a capped item
+///     running out.
 @MainActor
 final class Playback {
     /// Each item covers this much time before it needs a resync (docs/architecture.md).
@@ -51,6 +55,7 @@ final class Playback {
     static let maxSegments = 2_000
 
     private let assignments: [(NSScreen, PanelConfig)]
+    private let sync: SyncSettings
     private let onWindowsUp: () -> Void
     private let onEnd: () -> Void
     private var panels: [LivePanel] = []
@@ -77,9 +82,11 @@ final class Playback {
     /// app quit the moment Play was pressed (confirmed with a diagnostic log on
     /// 2026-10-21). So the hand-over goes: new windows up, then old ones away.
     init(assignments: [(NSScreen, PanelConfig)],
+         sync: SyncSettings,
          onWindowsUp: @escaping () -> Void,
          onEnd: @escaping () -> Void) {
         self.assignments = assignments
+        self.sync = sync
         self.onWindowsUp = onWindowsUp
         self.onEnd = onEnd
     }
@@ -114,7 +121,7 @@ final class Playback {
 
         for (window, config) in built {
             guard let path = config.file else {
-                panels.append(LivePanel(window: window, player: nil, itemDuration: 0, frame: 1.0 / 30))
+                panels.append(LivePanel(window: window, player: nil, itemDuration: 0, frame: 1.0 / 30, grace: sync.grace))
                 continue
             }
             let (item, itemDuration, fps) = try await Self.makeItem(URL(fileURLWithPath: path))
@@ -131,7 +138,8 @@ final class Playback {
             // the drift check sees the stopped panel and restarts it in sync.
             player.actionAtItemEnd = .pause
             attach(player, to: window, scaling: config.scaling)
-            panels.append(LivePanel(window: window, player: player, itemDuration: itemDuration, frame: 1 / max(fps, 1)))
+            panels.append(LivePanel(window: window, player: player, itemDuration: itemDuration,
+                                    frame: 1 / max(fps, 1), grace: sync.grace))
         }
 
         // Wait for every item to be ready, then PREROLL: decode the first frames
@@ -255,8 +263,12 @@ final class Playback {
             // it?" a few microseconds later for each panel in turn.
             let actual = CMSyncConvertTime(cm(now), from: hostClock, to: tb).seconds
             let stalled = player.rate == 0
-            if stalled || SyncMath.needsCorrection(actual: actual, expected: expected(p, at: now),
-                                                   duration: p.itemDuration, frame: p.frame) {
+            let out = SyncMath.needsCorrection(actual: actual, expected: expected(p, at: now),
+                                               duration: p.itemDuration, frame: p.frame, tolerance: sync.tolerance)
+            // A stalled panel is frozen, not drifting: waiting out the grace
+            // period would only leave a still picture on screen for longer.
+            // The gate is checked first so it sees every check either way.
+            if p.gate.check(out: out, now: now) || stalled {
                 let h1 = now + 0.5
                 player.setRate(1, time: cm(expected(p, at: h1)), atHostTime: cm(h1))
                 p.corrections += 1

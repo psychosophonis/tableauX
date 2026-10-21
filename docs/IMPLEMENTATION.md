@@ -94,7 +94,7 @@ Risk order: the stages that could kill the idea come first.
 | 0a | `proofs/clock-probe.swift` on Mat's two MacBooks on uni Wi-Fi | T10 (reachable), T11 (steady ≤ 5 ms). Gates 2–4. | **done 2026-10-21: T10 pass, T11 pass (0.28 ms)**; see below |
 | 0c | Lab run on the Mac mini (docs/LAB-TEST.md) | T4, T6 | **done 2026-10-21: full checklist run by Mat, T4 and T6 pass** |
 | 1 | Clock maths in PlayerCore: `ClockEstimator`, `SyncMath.correction` | unit tests; replay of 0a's real CSV | **done** (10 tests + 3 replay tests, mutation-checked) |
-| 1b | Show format with machines (one video per display) | ShowFile tests | go (Mat, 2026-10-21); no v1 loading needed, no real shows exist yet |
+| 1b | Show format with machines (one video per display) | ShowFile tests | **done 2026-10-21**: show v2 (`machines`, `sync`), v1 refused; tolerance + grace in the drift check; see below |
 | 2 | Clock service over UDP in the app (the probe as a component) | two Macs hold a steady estimate in the app | |
 | 3 | Modes: Standalone / Conductor / Player; messages; conductor setup lists all machines | a 6-screen show set up from one MacBook | v3 decisions confirmed (Mat, 2026-10-21) |
 | 4 | Two-MacBook sweep test (T12), dropout test (T13) | within 1 frame; no visible desync | release 0.2 |
@@ -113,6 +113,17 @@ Stage 0a result (2026-10-21, Mat's two MacBooks, university Wi-Fi, ~9 min at
 - T11 pass: raw offsets 95% within 15.2 ms of the trend; min-RTT filtered,
   0.28 ms. Clocks drift −12 ppm (a 33 ms frame every ~46 min).
 - Still unknown: whether the estimate is RIGHT (one-sided bias). T12 tests it.
+
+Stage 1b (2026-10-21): show file version 2 = `machines: [{name, panels}]`
++ `sync: {tolerance (frames), grace (s)}`, default 3 / 5 s (Mat). This Mac
+plays the machine with its computer name, or the only machine. The drift
+check now resyncs a panel only after it has been out of tolerance for the
+grace period (`DriftGate`, a debounce); stalled panels at once. Setup has
+tolerance and grace steppers. 41 tests; mutations checked (no reset when a
+panel comes back, no reset after a resync, no one-machine fallback: each
+fails a test). App launches; setup window and playback with the new
+settings not yet checked by eye. Single-machine default loosened from v1's
+1 frame / 2 s to 3 frames / 5 s; set 1 / 0 for the old behaviour.
 
 Stage 1 replay, `[claude]` `ClockReplayTests` (the same recording through
 `ClockEstimator`, the app's code, not the probe's filter):

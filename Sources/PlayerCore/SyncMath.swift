@@ -38,13 +38,16 @@ public enum SyncMath {
 
     /// Whether a panel is far enough out to be pulled back.
     ///
-    /// The threshold is one frame. Below that, a correction can't make the
-    /// picture better: the panel is already showing the right frame, and the
-    /// seek a correction needs would itself cause a visible hitch. This is a
-    /// DEADBAND: a zone of tolerated error where the controller does nothing, so
-    /// tiny measurement noise doesn't trigger a stream of corrections.
-    public static func needsCorrection(actual: Double, expected: Double, duration: Double, frame: Double) -> Bool {
-        circularDistance(actual, expected, duration: duration) > frame
+    /// The threshold is `tolerance` frames, at least one. Below one frame, a
+    /// correction can't make the picture better: the panel is already showing
+    /// the right frame, and the seek a correction needs would itself cause a
+    /// visible hitch. This is a DEADBAND: a zone of tolerated error where the
+    /// controller does nothing, so tiny measurement noise doesn't trigger a
+    /// stream of corrections. [claude] A show can widen it (`SyncSettings`),
+    /// trading closeness for fewer jumps.
+    public static func needsCorrection(actual: Double, expected: Double, duration: Double,
+                                       frame: Double, tolerance: Int = 1) -> Bool {
+        circularDistance(actual, expected, duration: duration) > frame * Double(max(tolerance, 1))
     }
 
     /// How far `actual` is AHEAD of `expected` on a loop (negative = behind),
@@ -121,5 +124,32 @@ public enum SyncMath {
     public static func repeats(duration: Double, cover: Double, maxSegments: Int) -> Int {
         guard duration > 0 else { return 1 }
         return max(1, min(maxSegments, Int((cover / duration).rounded(.up))))
+    }
+}
+
+/// [claude] The grace period of the drift check (docs/architecture.md § Sync):
+/// a panel must be out of tolerance at every check for `grace` seconds before
+/// it is re-synced.
+///
+/// This is a DEBOUNCE: a condition has to persist before it is acted on, so a
+/// passing error (a network blip, a momentary stall in reading the clock)
+/// doesn't cost a visible seek. Any check that finds the panel back in
+/// tolerance starts the wait again, and so does a resync, so a panel that stays
+/// out is corrected at most once per grace period, not once per check.
+/// `grace: 0` is no debounce at all: v1's correct-at-once rule.
+public struct DriftGate {
+    public let grace: Double
+    private var outSince: Double?        // host time of the first check that found it out
+
+    public init(grace: Double) { self.grace = grace }
+
+    /// Call once per drift check. Returns true when the panel should be
+    /// re-synced now.
+    public mutating func check(out: Bool, now: Double) -> Bool {
+        guard out else { outSince = nil; return false }
+        let since = outSince ?? now
+        guard now - since >= grace else { outSince = since; return false }
+        outSince = nil
+        return true
     }
 }

@@ -18,14 +18,17 @@ struct SetupView: View {
                 Text("No displays found.").foregroundStyle(.secondary)
             }
             ForEach(Array(model.displays.enumerated()), id: \.element.id) { i, display in
-                // refreshDisplays pads the show to one panel per display, but a
-                // binding to an index past the end would crash, so check anyway.
-                if i < model.show.panels.count {
+                // refreshDisplays pads this Mac's part to one panel per display,
+                // but a binding to an index past the end would crash, so check
+                // anyway. With no part for this Mac there are no rows; the
+                // problem list says why.
+                if let mi = model.machineIndex, i < model.show.machines[mi].panels.count {
                     PanelRow(number: i + 1, display: display,
-                             panel: $model.show.panels[i], model: model)
+                             panel: $model.show.machines[mi].panels[i], model: model)
                     Divider()
                 }
             }
+            SyncRow(sync: $model.show.sync)
             ProblemList(problems: model.problems, lastError: model.lastError)
             HStack {
                 Button("Open…") { model.openDialog() }.keyboardShortcut("o")
@@ -108,6 +111,22 @@ private struct PanelRow: View {
 
     private func factor(_ s: CGFloat) -> String {
         s == s.rounded() ? "\(Int(s))×" : String(format: "%.2f×", Double(s))
+    }
+}
+
+/// [claude] The show's sync settings (§ Sync › Drift check). The ranges are
+/// the file's rules (tolerance ≥ 1, grace ≥ 0) with an upper end a person
+/// would sensibly use; a hand-edited file outside them still opens.
+private struct SyncRow: View {
+    @Binding var sync: SyncSettings
+
+    var body: some View {
+        HStack(spacing: 24) {
+            Stepper("Sync tolerance: \(sync.tolerance) frame\(sync.tolerance == 1 ? "" : "s")",
+                    value: $sync.tolerance, in: 1...30)
+            Stepper(String(format: "Grace: %.0f s", sync.grace), value: $sync.grace, in: 0...60, step: 1)
+        }
+        .help("A panel more than the tolerance out for the grace period is put back with a seek. 1 frame, 0 s is the tightest.")
     }
 }
 

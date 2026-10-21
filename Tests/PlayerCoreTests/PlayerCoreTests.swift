@@ -76,6 +76,40 @@ final class SyncMathTests: XCTestCase {
         XCTAssertFalse(SyncMath.needsCorrection(actual: 0.01, expected: 59.995, duration: 60, frame: frame))
     }
 
+    // [claude] A show's tolerance widens the deadband in whole frames.
+    func testToleranceWidensTheDeadband() {
+        let frame = 1.0 / 30
+        // 2.5 frames out: corrected at tolerance 1 and 2, left alone at 3.
+        let actual = 5.0 + 2.5 * frame
+        XCTAssertTrue(SyncMath.needsCorrection(actual: actual, expected: 5, duration: 60, frame: frame, tolerance: 2))
+        XCTAssertFalse(SyncMath.needsCorrection(actual: actual, expected: 5, duration: 60, frame: frame, tolerance: 3))
+        // A tolerance below 1 is treated as 1, never as "correct everything".
+        XCTAssertFalse(SyncMath.needsCorrection(actual: 5.02, expected: 5, duration: 60, frame: frame, tolerance: 0))
+    }
+
+    // [claude] DriftGate: grace 0 is v1 (correct at the first check out).
+    func testZeroGraceCorrectsAtOnce() {
+        var gate = DriftGate(grace: 0)
+        XCTAssertTrue(gate.check(out: true, now: 100))
+    }
+
+    func testGraceWaitsThenFiresOnce() {
+        var gate = DriftGate(grace: 5)
+        // Checks once a second, panel out the whole time.
+        let fired = (0...10).map { gate.check(out: true, now: 100 + Double($0)) }
+        // Fires at 5 s (the first check that has been out for the full grace),
+        // then the wait starts again, so the next is at 6 + 5 = 11 s.
+        XCTAssertEqual(fired.enumerated().filter(\.element).map(\.offset), [5])
+    }
+
+    func testComingBackRestartsTheGrace() {
+        var gate = DriftGate(grace: 5)
+        for t in 0..<4 { XCTAssertFalse(gate.check(out: true, now: Double(t))) }
+        XCTAssertFalse(gate.check(out: false, now: 4))      // a blip, then back in tolerance
+        for t in 5..<10 { XCTAssertFalse(gate.check(out: true, now: Double(t))) }
+        XCTAssertTrue(gate.check(out: true, now: 10))       // 5 s out since t = 5
+    }
+
     func testResumeContinuesWherePaused() {
         // Started at 1000, paused 10 s in, resumed at 1050: still 10 s in.
         let start = SyncMath.resumedStart(start: 1000, pausedAt: 1010, resumeAt: 1050)
@@ -99,22 +133,67 @@ final class SyncMathTests: XCTestCase {
 
 final class ShowFileTests: XCTestCase {
     func testRoundTrip() throws {
-        let show = Show(panels: [PanelConfig(file: "/a.mp4", audio: true, scaling: .fill),
-                                 PanelConfig(),
-                                 PanelConfig(file: "/c.mov")],
+        let show = Show(machines: [
+                            Machine(name: "Lab Mac mini", panels: [PanelConfig(file: "/a.mp4", audio: true, scaling: .fill),
+                                                                   PanelConfig(),
+                                                                   PanelConfig(file: "/c.mov")]),
+                            Machine(name: "MacBook Pro", panels: [PanelConfig(file: "/d.mov")]),
+                        ],
+                        sync: SyncSettings(tolerance: 1, grace: 10),
                         playOnLaunch: true)
         XCTAssertEqual(try ShowFile.decode(ShowFile.encode(show)), show)
     }
 
+    private func json(_ s: String) -> Data { s.data(using: .utf8)! }
+    private let sync = #""sync":{"tolerance":3,"grace":5}"#
+
+    func testNewShowHasMatsDefaults() {
+        XCTAssertEqual(Show(machines: [Machine(name: "A")]).sync, SyncSettings(tolerance: 3, grace: 5))
+    }
+
+    // [claude] Version 1 (0.1.1) files are refused, by name, not with a
+    // confusing "missing key" error: the version is checked first.
+    func testRefusesVersion1() {
+        XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":1,"panels":[],"playOnLaunch":false}"#))) {
+            XCTAssertEqual($0 as? ShowFileError, .unsupportedVersion(1))
+        }
+    }
+
     func testRefusesAFutureVersion() {
-        let json = #"{"version":2,"panels":[],"playOnLaunch":false}"#.data(using: .utf8)!
-        XCTAssertThrowsError(try ShowFile.decode(json)) {
-            XCTAssertEqual($0 as? ShowFileError, .unsupportedVersion(2))
+        XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":3,"machines":[],"playOnLaunch":false}"#))) {
+            XCTAssertEqual($0 as? ShowFileError, .unsupportedVersion(3))
         }
     }
 
     func testUnknownScalingIsAnError() {
-        let json = #"{"version":1,"panels":[{"audio":false,"scaling":"stretch"}],"playOnLaunch":false}"#.data(using: .utf8)!
-        XCTAssertThrowsError(try ShowFile.decode(json))
+        let s = #"{"version":2,"machines":[{"name":"A","panels":[{"audio":false,"scaling":"stretch"}]}],"#
+            + sync + #","playOnLaunch":false}"#
+        XCTAssertThrowsError(try ShowFile.decode(json(s)))
+    }
+
+    func testAShowNeedsAMachine() {
+        XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":2,"machines":[],"# + sync + #","playOnLaunch":false}"#))) {
+            XCTAssertEqual($0 as? ShowFileError, .noMachines)
+        }
+    }
+
+    func testRefusesNonsenseSync() {
+        for bad in [#""sync":{"tolerance":0,"grace":5}"#, #""sync":{"tolerance":3,"grace":-1}"#] {
+            XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":2,"machines":[{"name":"A","panels":[]}],"# + bad + #","playOnLaunch":false}"#)))
+        }
+    }
+
+    // [claude] § Show file › which machine this Mac plays.
+    func testMachineIsFoundByName() {
+        let show = Show(machines: [Machine(name: "A"), Machine(name: "B")])
+        XCTAssertEqual(show.machineIndex(named: "B"), 1)
+    }
+
+    func testAOneMachineShowPlaysOnAnyMac() {
+        XCTAssertEqual(Show(machines: [Machine(name: "Laptop")]).machineIndex(named: "Lab Mac mini"), 0)
+    }
+
+    func testSeveralMachinesAndNoMatchIsNoPart() {
+        XCTAssertNil(Show(machines: [Machine(name: "A"), Machine(name: "B")]).machineIndex(named: "C"))
     }
 }
