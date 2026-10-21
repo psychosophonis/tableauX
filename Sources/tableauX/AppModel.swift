@@ -645,13 +645,17 @@ final class AppModel: ObservableObject {
         if blocking.isEmpty, !show.works.indices.contains(where: { length(of: $0) > 0 }) {
             blocking.append("No work has a file for this Mac's displays.")
         }
-        // [claude] P2 plays playlists on one Mac. Across Macs the players
-        // would each time the works by their own files' lengths and drift
-        // apart at the first change; P3 sends one set of lengths to all. A
-        // show of one work that loops until stopped (a version 2 show) has
-        // no changes to time, so it plays across Macs as 0.1.3 did.
+        // [claude] Until P3, each Mac times the works by its OWN files'
+        // lengths. The timeline is a pure function of those lengths and the
+        // shared start, so Macs whose files have the same lengths change
+        // work together; Macs whose lengths differ drift apart at the first
+        // change. This build can't compare lengths across Macs, so it WARNS
+        // with the condition instead of blocking (Mat, 0.3.1: same file on
+        // every Mac, Play was blocked for no reason). P3 sends the
+        // conductor's lengths to all and the condition goes. A single work
+        // that loops until stopped has no change to time, so no warning.
         if mode != .standalone, !isSingleLoopingWork {
-            blocking.append("Playlists across Macs come in the next stage. In Conductor or Player mode, a show must be one work set to play until stopped, with shorter screens looping.")
+            warnings.append("Across Macs (until the next stage): every Mac must have every work, with files of the same lengths, or the Macs drift apart at the first change. → and ← are off.")
         }
         return (blocking, warnings)
     }

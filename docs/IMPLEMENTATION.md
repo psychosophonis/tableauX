@@ -245,8 +245,15 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   Across Macs it still plays only one looping work. Not published.
   Mat 2026-10-21: "all working very well", except a display added after a
   scan stayed black instead of taking the left-over files.
-- 0.3.1 (2026-10-21, uncommitted): 0.3.0 + new displays take left-over
-  files (P2c). Not published.
+- 0.3.1 (2026-10-21, commit ca9ab4d): 0.3.0 + new displays take left-over
+  files (P2c). Not published. On three Macs (one Intel) Play was blocked
+  by the P2 network limit although every Mac had the same file.
+- 0.3.2 (2026-10-22): the P2 network limit is a warning, not a block, so a
+  playlist of identical-length files plays across Macs. Not published.
+  Mat 2026-10-22: "all working", a short ProRes test video across 5
+  screens on 2 Macs, playlist with work changes (by eye; no log or
+  photo recorded). Which 2 of the 3 Macs, and whether the Intel one was
+  among them, not recorded.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

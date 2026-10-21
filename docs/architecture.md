@@ -516,8 +516,10 @@ for Mat to confirm or change. -->
 - **[claude] → / ←:** black at once, the chosen work after the gap. In a gap,
   "current" is the work about to start.
 - **[claude] P2 limit:** until P3 sends one set of lengths to every Mac,
-  Conductor and Player modes play only a show of one work that loops until
-  stopped (a version 2 show), and → / ← are off there.
+  each Mac times works by its own files, so a playlist across Macs keeps
+  in step only if every Mac has every work with files of the same lengths.
+  Setup warns of this (0.3.2; 0.3.0–0.3.1 blocked it, which stopped Mat
+  playing identical files on three Macs). → / ← are off across Macs.
 
 ### Targets
 | # | Target | How it is checked |
