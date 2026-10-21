@@ -91,12 +91,14 @@ first version** (not a sync spike first).
 - v2 (several videos per display, sync groups/offsets/nudge): spec DRAFT in
   docs/architecture.md, awaiting Mat's confirmation of the ▸ decisions.
 
-### Release 0.1.1 (2026-10-21): renamed to tableauX
-App, binary, process, package and repo renamed (github.com/psychosophonis/
-tableauX; the old /tableau URL redirects). Show files are `.tableaux`; Open
-still accepts `.msshow`. `PlayerCore` and the local folder keep their names.
+### Release 0.1.1 (2026-10-21): first public release, as tableauX
+github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen
+Player", repo /tableau) was published minutes earlier and then deleted at
+Mat's request, so 0.1.1 is the first release. App, binary, process, package and
+repo are tableauX; show files are `.tableaux` (Open still accepts `.msshow`).
+`PlayerCore` and the local folder keep their names.
 
-### Release 0.1.0 (2026-10-21), published as "Multiscreen Player"
+Work in this release:
 - Review bug 2 fixed: `SyncMath.resumedStart` clamps a pause to the start, so
   Space in the first second resumes from frame 0 (tested); Space is ignored
   until the start is scheduled.
