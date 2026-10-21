@@ -10,8 +10,9 @@ lab screen array (BCM116: a Mac mini driving three 4K displays). It replaces
 "one huge file stretched across a virtual display", which resamples the image
 and produces artefacts.
 
-Non-goals (v1): network sync between computers, projection warping or edge
-blending, routing audio to particular output devices, playlists, editing.
+Non-goals (v1): network sync between computers (planned: see "v3"
+below), projection warping or edge blending, routing audio to particular
+output devices, playlists, editing.
 
 ## Targets (measurable)
 
@@ -146,6 +147,106 @@ Group { id: string, name: string }
 | T7 | A video with offset *d* stays within 1 frame of its group's time minus *d* | `SyncMathTests` (arithmetic); probe run (behaviour) |
 | T8 | A nudge takes effect within 0.5 s and is then held | lab or desk run, frame-numbered clips |
 | T9 | Decode budget: the heaviest intended layout plays with no dropped frames on the Mac mini | lab run; ▸ Mat to name the heaviest layout (e.g. 3 displays × 4 HD videos) |
+
+## v3: several machines, one show
+
+<!-- [claude] Drafted 2026-10-21 from Mat's ask: extend the single-machine
+sync to several Macs, server/client, as MultiScreener (2009) did well enough
+over university Wi-Fi; then: one app with client/server modes, every machine
+playing its own displays (e.g. 6 screens off two MacBook Pros). Claude's
+proposals in it were confirmed by Mat on 2026-10-21, so this section is
+normative. Builds on v1; v2 is still a draft and v3 does not depend on it. -->
+
+### Idea
+Today every panel on one Mac follows that Mac's host clock. Across Macs there
+is no shared clock, so v3 builds one: a **conductor** (the server) owns the
+reference clock and the show; each **player** (client) keeps an estimate of
+`conductor time = host time + offset`, and does everything else exactly as
+now, in conductor time. Start, pause and resume become "at conductor time T",
+the same scheduled-start trick as v1, so one message reaches every machine
+well before T and network delay doesn't affect the start.
+
+### Clock
+- NTP-style exchange over UDP: the player sends its time, the conductor
+  replies with its own; from the round trip the player estimates the offset.
+  Wi-Fi delay is noisy, but the noise only ever ADDS delay, so the samples
+  with the SHORTEST round trip are the accurate ones: keep a window of recent
+  samples and use the minimum-round-trip one (Cristian's algorithm with
+  min-RTT filtering). Re-estimate continuously, several times a second.
+- Two Macs' clocks also run at slightly different rates (tens of parts per
+  million: roughly a frame every 15–30 min), so the offset is tracked over
+  time, not measured once.
+- Small corrections slew: a player that's a little off plays at a rate just
+  off 1.0 until it's back (MultiScreener's approach, invisible). Large errors
+  (> 1 frame after slewing, or after a dropout) resync with a seek, as now.
+  Bands (implemented in `SyncMath.correction`, not yet used by the
+  app): error under ¼ frame, nothing; up to 1 frame, slew to close it over
+  2 s, rate change capped at ±0.5%; over 1 frame, resync (v1's T3 unchanged).
+- Sample rate matters: `proofs/clock-probe.swift` with simulated one-sided
+  noise of 0–50 ms kept the filtered estimate within 1.1 ms at 20 exchanges/s
+  but not at 2/s (11.7 ms, fail). Players exchange at 20/s (UDP packets of
+  32 bytes: negligible load).
+
+API (PlayerCore, Stage 1, tested in `NetworkClockTests`):
+```
+ClockSample(t1:t2:t3:t4:).offset / .roundTrip
+ClockEstimator(window: 2, trendWindow: 60).add(_:) / .filtered / .drift / .conductorTime(host:)
+SyncMath.signedError(actual:expected:duration:) -> Double     // wrap-aware, signed
+SyncMath.correction(error:frame:) -> .none | .slew(rate:) | .resync
+```
+
+### One app, three modes (Mat's decision, 2026-10-21)
+- The same app runs everywhere, in one of three modes, chosen in setup:
+  - **Standalone**: as v1 (and v2); no network.
+  - **Conductor** (server): holds the show and the reference clock, AND plays
+    on all of its own displays.
+  - **Player** (client): joins a conductor and plays on all of its own
+    displays.
+- Every machine, in any mode, drives all of its displays exactly as a single
+  machine does now. A show spans machines. Example: two MacBook Pros with
+  three screens each make a six-screen work, one of them in Conductor mode.
+- How many displays a machine can drive is the hardware's limit, not the
+  app's: it depends on the chip (on recent MacBook Pros, Pro chips drive fewer
+  external displays than Max chips). Check Apple's specs for the machines used.
+
+### Show and media
+- The show file lives on the conductor. It names displays as (machine name,
+  display number), numbered per machine left to right as now; the conductor
+  sends each player its part.
+- Setup in Conductor mode lists every connected machine's displays, grouped by
+  machine, so the whole work is set up from one screen. Player mode shows the
+  machine's name and "waiting for conductor".
+- Each machine plays files from its own disk; video is never streamed (4K
+  over Wi-Fi isn't reliable). Before Play, the conductor checks every
+  machine has every file it needs (name, size, and a hash) and blocks Play
+  otherwise, as missing files do now.
+- Discovery by Bonjour on the local network, with a typed-in address as
+  fallback: university Wi-Fi often blocks Bonjour, and some networks stop
+  devices reaching each other at all ("client isolation").
+- If a player loses the conductor, it keeps playing on its last clock
+  estimate and rejoins when it can; the show doesn't stop.
+
+### Targets
+| # | Target | How it is checked |
+|---|--------|-------------------|
+| T10 | Two Macs can reach each other over the target network | `ping` / probe handshake on the real Wi-Fi: first, because nothing else matters if this fails |
+| T11 | Player's clock-offset estimate steady to within 5 ms (95% of samples) | probe on two Macs on the target network. This measures steadiness only: with no third clock to compare against, a steady but WRONG estimate would pass. Accuracy is T12's job. |
+| T12 | Panels on different Macs within 1 frame on the sweep-line test | `make-test-media.sh` clips across two Macs, photographed (as T6) |
+| T13 | A 30 s network dropout causes no visible desync | sweep-line test with Wi-Fi switched off and on mid-run |
+
+### Riskiest assumption, and its cheapest test
+That the target network gives clock estimates good to a few milliseconds.
+A simulation can't answer this, because the answer depends on that network's
+real delays. The cheapest real test is a probe on two MacBooks on the
+university Wi-Fi: first check they can reach each other (T10), then log the
+offset estimate over 10 minutes (T11). Only if that holds is the rest worth
+building.
+
+Result (2026-10-21, two MacBooks on the university Wi-Fi, ~9 min): T10 pass
+(0.2% packets lost); T11 pass, filtered estimate steady to 0.28 ms (raw
+samples 15.2 ms); clock drift −12 ppm. Replayed through `ClockEstimator` in
+`ClockReplayTests`: 0.27 ms, and 0.40 ms worst across a simulated 300 s
+dropout. Steadiness is shown; accuracy (T12) is not yet.
 
 ## API Contracts (PlayerCore library)
 

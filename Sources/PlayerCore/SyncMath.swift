@@ -47,6 +47,52 @@ public enum SyncMath {
         circularDistance(actual, expected, duration: duration) > frame
     }
 
+    /// How far `actual` is AHEAD of `expected` on a loop (negative = behind),
+    /// taking the shorter way round, in (−duration/2, duration/2].
+    ///
+    /// The signed partner of `circularDistance`: a speed correction needs to
+    /// know which way to push, not just how far.
+    public static func signedError(actual: Double, expected: Double, duration: Double) -> Double {
+        guard duration > 0 else { return actual - expected }
+        var d = (actual - expected).truncatingRemainder(dividingBy: duration)
+        if d > duration / 2 { d -= duration }
+        if d <= -duration / 2 { d += duration }
+        return d
+    }
+
+    /// What to do about a panel that is `error` seconds ahead (negative =
+    /// behind) of where its clock says it should be.
+    public enum Correction: Equatable {
+        case none
+        /// Play at this rate (just off 1.0) until the next check.
+        case slew(rate: Double)
+        /// Jump to the right time, as v1 does.
+        case resync
+    }
+
+    /// [claude] The v3 correction rule (docs/architecture.md, v3 § Clock).
+    ///
+    /// Three bands, a GRADED CONTROLLER rather than v1's single deadband:
+    /// - under a quarter frame: leave it alone. Clock estimates jitter by
+    ///   around a millisecond, and chasing that would make the rate hunt.
+    /// - up to one frame: SLEW, i.e. play slightly fast or slow so the error
+    ///   melts away over `horizon` seconds. A 0.5% speed change is invisible
+    ///   (and, with a pitch-keeping audio algorithm, inaudible), while a seek
+    ///   is a visible hitch. This is how MultiScreener kept machines together.
+    ///   The rate is capped at ±`maxRateChange`, so a bigger error just takes
+    ///   longer to close.
+    /// - over one frame: RESYNC with a seek, exactly as v1's drift check does,
+    ///   so target T3 is unchanged. Slewing only adds the sub-frame band.
+    public static func correction(error: Double, frame: Double,
+                                  horizon: Double = 2, maxRateChange: Double = 0.005) -> Correction {
+        let size = abs(error)
+        if size > frame { return .resync }
+        if size < frame / 4 { return .none }
+        // Ahead (error > 0) means slow down: rate below 1.
+        let change = min(maxRateChange, size / horizon)
+        return .slew(rate: error > 0 ? 1 - change : 1 + change)
+    }
+
     /// The shared start after a pause, so playback resumes where it stopped.
     ///
     /// Pausing freezes the picture but not the host clock, so the reference
