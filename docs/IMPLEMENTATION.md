@@ -95,7 +95,7 @@ Risk order: the stages that could kill the idea come first.
 | 0c | Lab run on the Mac mini (docs/LAB-TEST.md) | T4, T6 | **done 2026-10-21: full checklist run by Mat, T4 and T6 pass** |
 | 1 | Clock maths in PlayerCore: `ClockEstimator`, `SyncMath.correction` | unit tests; replay of 0a's real CSV | **done** (10 tests + 3 replay tests, mutation-checked) |
 | 1b | Show format with machines (one video per display) | ShowFile tests | **done 2026-10-21**: show v2 (`machines`, `sync`), v1 refused; tolerance + grace in the drift check; see below |
-| 2 | Clock service over UDP in the app (the probe as a component) | two Macs hold a steady estimate in the app | |
+| 2 | Clock service over UDP in the app (the probe as a component) | two Macs hold a steady estimate in the app | built, loopback checks pass; **two-Mac run pending (Mat)** |
 | 3 | Modes: Standalone / Conductor / Player; messages; conductor setup lists all machines | a 6-screen show set up from one MacBook | v3 decisions confirmed (Mat, 2026-10-21) |
 | 4 | Two-MacBook sweep test (T12), dropout test (T13) | within 1 frame; no visible desync | release 0.2 |
 | later | v2 multi-video | needs the six v2 ▸ decisions, decode-load probe (T9) | spec draft |
@@ -124,6 +124,25 @@ panel comes back, no reset after a resync, no one-machine fallback: each
 fails a test). App launches; setup window and playback with the new
 settings not yet checked by eye. Single-machine default loosened from v1's
 1 frame / 2 s to 3 frames / 5 s; set 1 / 0 for the old behaviour.
+
+Stage 2 (2026-10-21, `[claude]`): `ClockService.swift` (ClockServer /
+ClockClient, BSD sockets on dedicated threads, as the probe), `ClockPacket`
+and `SteadinessMeter` in PlayerCore (8 tests). Setup: This Mac = Standalone /
+Conductor / Player (+ address), stored per Mac; status line; logged every 10 s.
+Playback does not use conductor time yet (Stage 3). Checks on one Mac:
+- app as Conductor, probe joins over loopback: 371/371 replies, steady 0.01 ms;
+- probe serves a fake +7.5 ms / 50 ppm, app as Player: drift read 49.7–51.3
+  ppm; offset 8.09 → 8.55 → 9.07 ms at 10 s steps, i.e. 7.5 ms plus 50 ppm
+  of elapsed time, as it should be;
+- stop/start five times on the same port: binds every time, stops ≤ 0.1 s.
+Two bugs found by running it: the clock started twice at launch (the mode's
+didSet fires in init after all), so the second bind failed; and stops took
+1 s because `shutdown()` doesn't wake a blocked UDP recvfrom on macOS (fixed
+with a 0.1 s receive timeout). Untested: macOS Local Network permission for
+the app on a real network (loopback is exempt). The two-Mac run tests it.
+To run it: build the app (`scripts/make-app.sh`), Conductor on one MacBook,
+Player on the other with the first one's address, 10 min; read
+`log show --predicate 'process == "tableauX"' --last 15m | grep clock:`.
 
 Stage 1 replay, `[claude]` `ClockReplayTests` (the same recording through
 `ClockEstimator`, the app's code, not the probe's filter):

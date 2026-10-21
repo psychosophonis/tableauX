@@ -43,6 +43,10 @@ cat > "${app}/Contents/Info.plist" <<EOF
   <key>CFBundleVersion</key>            <string>${version}</string>
   <key>LSMinimumSystemVersion</key>     <string>13.0</string>
   <key>NSHighResolutionCapable</key>    <true/>
+  <!-- [claude] v3: macOS asks before an app may reach other devices on the
+       local network; this is the reason the prompt shows. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>tableauX keeps its clock in step with the other Macs playing the same show.</string>
 </dict>
 </plist>
 EOF

@@ -97,3 +97,74 @@ public struct ClockEstimator {
         return host + best.offset + (drift ?? 0) * (host - midpoint)
     }
 }
+
+/// [claude] One clock request or reply on the wire (v3 § Clock › Wire): four
+/// UInt64s, sequence number then t1, t2, t3 in nanoseconds.
+///
+/// The byte order is fixed as LITTLE-ENDIAN rather than left to the machine.
+/// Every Mac this runs on happens to be little-endian, so "native" would work
+/// today, but a wire format is a CONTRACT between two programs, and a
+/// contract shouldn't depend on an accident of the hardware. Fixing it costs
+/// nothing and makes the probe's packets and the app's interchangeable.
+public struct ClockPacket: Equatable {
+    public static let size = 32
+    public var seq, t1, t2, t3: UInt64
+
+    public init(seq: UInt64, t1: UInt64, t2: UInt64 = 0, t3: UInt64 = 0) {
+        self.seq = seq; self.t1 = t1; self.t2 = t2; self.t3 = t3
+    }
+
+    public var bytes: [UInt8] {
+        [seq, t1, t2, t3].flatMap { v in (0..<8).map { UInt8(truncatingIfNeeded: v.littleEndian >> ($0 * 8)) } }
+    }
+
+    /// Nil unless exactly `size` bytes: a short or long datagram is not ours.
+    public init?(bytes: [UInt8]) {
+        guard bytes.count == Self.size else { return nil }
+        func word(_ i: Int) -> UInt64 {
+            (0..<8).reduce(0) { $0 | UInt64(bytes[i * 8 + $1]) << ($1 * 8) }
+        }
+        self.init(seq: word(0), t1: word(1), t2: word(2), t3: word(3))
+    }
+
+    /// The finished exchange, in seconds, once the reply arrives at `t4` ns.
+    public func sample(t4: UInt64) -> ClockSample {
+        ClockSample(t1: Double(t1) / 1e9, t2: Double(t2) / 1e9, t3: Double(t3) / 1e9, t4: Double(t4) / 1e9)
+    }
+}
+
+/// [claude] T11's measure, kept live: how far the offset estimate wanders from
+/// its own drift trend, as the 95th percentile over the last `window` seconds.
+///
+/// Measuring spread AROUND A FITTED LINE, not around the mean, is the point:
+/// two clocks drift apart steadily (−12 ppm on Mat's MacBooks), so the offset
+/// is supposed to move. The mean would count that steady movement as
+/// unsteadiness; the residuals from a line count only the wandering. This is
+/// the same measure the probe prints, so the app's number and the probe's
+/// can be compared directly.
+public struct SteadinessMeter {
+    public let window: Double
+    private var points: [(time: Double, offset: Double)] = []
+
+    public init(window: Double = 60) { self.window = window }
+
+    /// Times in order, seconds; offsets in seconds.
+    public mutating func add(time: Double, offset: Double) {
+        points.append((time, offset))
+        points.removeAll { time - $0.time > window }
+    }
+
+    /// The 95th-percentile distance from the trend, in seconds; nil with too
+    /// few points to fit a line meaningfully.
+    public var p95Spread: Double? {
+        guard points.count >= 10 else { return nil }
+        let n = Double(points.count)
+        let mx = points.reduce(0) { $0 + $1.time } / n
+        let my = points.reduce(0) { $0 + $1.offset } / n
+        let sxy = points.reduce(0) { $0 + ($1.time - mx) * ($1.offset - my) }
+        let sxx = points.reduce(0) { $0 + ($1.time - mx) * ($1.time - mx) }
+        let slope = sxx > 0 ? sxy / sxx : 0
+        let spread = points.map { abs($0.offset - (my + slope * ($0.time - mx))) }.sorted()
+        return spread[min(spread.count - 1, Int(Double(spread.count - 1) * 0.95))]
+    }
+}

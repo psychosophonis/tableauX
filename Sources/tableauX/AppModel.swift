@@ -42,6 +42,40 @@ final class AppModel: ObservableObject {
     private let lastShowKey = "lastShowPath"
     private var hasLaunched = false
 
+    // MARK: Network mode (v3) [claude]
+
+    /// v3 § One app, three modes. Stored per Mac, not in the show: it says what
+    /// this machine is, and the same show can be opened in any mode.
+    enum Mode: String, CaseIterable, Identifiable {
+        case standalone, conductor, player
+        var id: String { rawValue }
+        var label: String { rawValue.capitalized }
+    }
+
+    @Published var mode: Mode = .standalone {
+        didSet {
+            UserDefaults.standard.set(mode.rawValue, forKey: modeKey)
+            if clockReady { restartClock() }
+        }
+    }
+    /// False until init has restored the saved mode. Without it, restoring the
+    /// mode in init started the clock once from `didSet` and again from init's
+    /// own call (observed 2026-10-21: the second bind found the port taken).
+    private var clockReady = false
+    /// The conductor's address, as typed. Applied by `restartClock()` (setup
+    /// calls it when the field is submitted), not on every keystroke.
+    @Published var conductorAddress = "" {
+        didSet { UserDefaults.standard.set(conductorAddress, forKey: addressKey) }
+    }
+    /// One line about the clock for setup (§ v3 › Clock, What setup shows).
+    @Published private(set) var clockStatus = ""
+
+    private let modeKey = "networkMode", addressKey = "conductorAddress"
+    private var server: ClockServer?
+    private var client: ClockClient?
+    private var statusTimer: Timer?
+    private var statusTicks = 0
+
     init() {
         refreshDisplays()
         // Re-read displays whenever one is plugged in, unplugged or rearranged.
@@ -52,6 +86,78 @@ final class AppModel: ObservableObject {
         if let path = UserDefaults.standard.string(forKey: lastShowKey) {
             open(URL(fileURLWithPath: path))
         }
+        // Restore the saved mode, then start the clock exactly once.
+        conductorAddress = UserDefaults.standard.string(forKey: addressKey) ?? ""
+        mode = UserDefaults.standard.string(forKey: modeKey).flatMap(Mode.init) ?? .standalone
+        clockReady = true
+        restartClock()
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateClockStatus() }
+        }
+    }
+
+    /// Stops whatever clock component is running and starts the one the mode
+    /// asks for. One place that owns the transition, so there is never a
+    /// server and a client at once, or a socket left open from the last mode.
+    func restartClock() {
+        server?.stop(); server = nil
+        client?.stop(); client = nil
+        do {
+            switch mode {
+            case .standalone: break
+            case .conductor: server = try ClockServer()
+            case .player:
+                let address = conductorAddress.trimmingCharacters(in: .whitespaces)
+                if !address.isEmpty { client = try ClockClient(conductor: address) }
+            }
+        } catch {
+            clockStatus = "Clock: \(error)"
+            NSLog("clock: %@", "\(error)")
+            return
+        }
+        NSLog("clock: mode %@", mode.rawValue)
+        updateClockStatus()
+    }
+
+    /// Once a second: refresh the status line; every 10 s, also log it, so a
+    /// long run can be read back afterwards with `log show`.
+    private func updateClockStatus() {
+        statusTicks += 1
+        if let server {
+            let players = server.players()
+            clockStatus = "Conductor: answering clock requests on \(server.addresses.joined(separator: ", "))"
+                + (players.isEmpty ? ". No players yet." : ". Players: \(players.joined(separator: ", ")).")
+        } else if let client {
+            clockStatus = Self.describe(client.status)
+        } else if mode == .player {
+            clockStatus = "Player: type the conductor's address and press Return."
+        } else if clockStatus.hasPrefix("Clock:") == false {
+            clockStatus = ""
+        }
+        if statusTicks % 10 == 0, !clockStatus.isEmpty { NSLog("clock: %@", clockStatus) }
+    }
+
+    /// e.g. "Player of 10.0.0.5: 20 replies/s · steady to 0.28 ms · drift −12.0 ppm · offset 765898979.83 ms".
+    /// The thresholds are the targets: no reply in 5 s is T10 failing, a
+    /// spread over 5 ms is T11 failing.
+    private static func describe(_ s: ClockClient.Status) -> String {
+        let head = "Player of \(s.conductor)"
+        guard let since = s.secondsSinceReply else {
+            return s.secondsRunning > 5
+                ? "\(head): no replies. Check the address, that the conductor is running, and that this network lets Macs reach each other."
+                : "\(head): asking…"
+        }
+        if since > 5 { return String(format: "%@: no replies for %.0f s; running on the last estimate.", head, since) }
+        var parts = [String(format: "%.0f replies/s", s.repliesPerSecond)]
+        if let st = s.steadiness {
+            parts.append(String(format: "steady to %.2f ms%@", st * 1000, st > 0.005 ? " (over 5 ms)" : ""))
+        } else {
+            parts.append("measuring steadiness…")
+        }
+        if let d = s.drift { parts.append(String(format: "drift %.1f ppm", d * 1e6)) }
+        // In ms, as the probe prints it, so the two can be compared directly.
+        if let o = s.offset { parts.append(String(format: "offset %.2f ms", o * 1000)) }
+        return "\(head): " + parts.joined(separator: " · ")
     }
 
     /// Called once the setup window is on screen; starts "Play on launch".

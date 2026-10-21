@@ -29,6 +29,7 @@ struct SetupView: View {
                 }
             }
             SyncRow(sync: $model.show.sync)
+            NetworkRow(model: model)
             ProblemList(problems: model.problems, lastError: model.lastError)
             HStack {
                 Button("Open…") { model.openDialog() }.keyboardShortcut("o")
@@ -127,6 +128,33 @@ private struct SyncRow: View {
             Stepper(String(format: "Grace: %.0f s", sync.grace), value: $sync.grace, in: 0...60, step: 1)
         }
         .help("A panel more than the tolerance out for the grace period is put back with a seek. 1 frame, 0 s is the tightest.")
+    }
+}
+
+/// [claude] This Mac's network mode (v3 § One app, three modes) and the
+/// clock's status. Until Stage 3, Conductor and Player run only the clock;
+/// playback still follows this Mac's own clock.
+private struct NetworkRow: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Picker("This Mac", selection: $model.mode) {
+                    ForEach(AppModel.Mode.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 320)
+                if model.mode == .player {
+                    TextField("Conductor's address", text: $model.conductorAddress)
+                        .frame(width: 180)
+                        .onSubmit { model.restartClock() }
+                }
+            }
+            if !model.clockStatus.isEmpty {
+                Text(model.clockStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }
     }
 }
 

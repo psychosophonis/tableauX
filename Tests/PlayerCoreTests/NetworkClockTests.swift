@@ -116,4 +116,60 @@ final class NetworkClockTests: XCTestCase {
         // 30 ms ahead would need 1.5%: capped at 0.5%.
         XCTAssertEqual(SyncMath.correction(error: 0.030, frame: frame), .slew(rate: 0.995))
     }
+
+    // MARK: Stage 2 [claude]
+
+    func testPacketRoundTrips() {
+        let p = ClockPacket(seq: 42, t1: 7_212_965_987_791, t2: 773_111_958_167_500, t3: .max)
+        XCTAssertEqual(p.bytes.count, 32)
+        XCTAssertEqual(ClockPacket(bytes: p.bytes), p)
+    }
+
+    /// The app's bytes are the probe's bytes: the probe sends a native [UInt64]
+    /// array, and every Mac is little-endian. This is what lets the probe test
+    /// the app (and the app the probe).
+    func testPacketMatchesTheProbesLayout() {
+        let words: [UInt64] = [1, 0x0102_0304_0506_0708, 3, 4]
+        let native = words.withUnsafeBytes { Array($0) }
+        XCTAssertEqual(ClockPacket(seq: 1, t1: 0x0102_0304_0506_0708, t2: 3, t3: 4).bytes, native)
+    }
+
+    func testWrongSizedDatagramIsNotAPacket() {
+        XCTAssertNil(ClockPacket(bytes: [UInt8](repeating: 0, count: 31)))
+        XCTAssertNil(ClockPacket(bytes: [UInt8](repeating: 0, count: 33)))
+    }
+
+    func testPacketBecomesASampleInSeconds() {
+        let s = ClockPacket(seq: 0, t1: 1_000_000_000, t2: 6_000_000_000, t3: 6_000_100_000).sample(t4: 1_010_100_000)
+        XCTAssertEqual(s.offset, 4.995, accuracy: 1e-9)          // ((6 − 1) + (6.0001 − 1.0101)) / 2
+        XCTAssertEqual(s.roundTrip, 0.01, accuracy: 1e-9)
+    }
+
+    /// Drift is not wobble: an offset moving in a perfectly straight line
+    /// (here 50 ppm) must read as perfectly steady.
+    func testSteadyDriftReadsAsSteady() {
+        var m = SteadinessMeter()
+        for i in 0..<600 { let t = Double(i) * 0.05; m.add(time: t, offset: 0.0075 + 50e-6 * t) }
+        XCTAssertEqual(try XCTUnwrap(m.p95Spread), 0, accuracy: 1e-9)
+    }
+
+    func testKnownScatterGivesKnownSpread() {
+        var m = SteadinessMeter()
+        // ±1 ms around a drifting line, alternating: every point is 1 ms out.
+        for i in 0..<600 { let t = Double(i) * 0.05; m.add(time: t, offset: 50e-6 * t + (i % 2 == 0 ? 0.001 : -0.001)) }
+        XCTAssertEqual(try XCTUnwrap(m.p95Spread), 0.001, accuracy: 1e-5)
+    }
+
+    func testOldWobbleLeavesTheWindow() {
+        var m = SteadinessMeter(window: 60)
+        for i in 0..<100 { m.add(time: Double(i) * 0.1, offset: i % 2 == 0 ? 0.01 : -0.01) }   // 10 s of 10 ms wobble
+        for i in 0..<700 { m.add(time: 10 + Double(i) * 0.1, offset: 0) }                     // then 70 s still
+        XCTAssertEqual(try XCTUnwrap(m.p95Spread), 0, accuracy: 1e-9)
+    }
+
+    func testNoSpreadFromTooFewPoints() {
+        var m = SteadinessMeter()
+        for i in 0..<9 { m.add(time: Double(i), offset: 0) }
+        XCTAssertNil(m.p95Spread)
+    }
 }

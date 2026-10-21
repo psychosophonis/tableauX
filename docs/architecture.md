@@ -216,6 +216,20 @@ well before T and network delay doesn't affect the start.
   noise of 0–50 ms kept the filtered estimate within 1.1 ms at 20 exchanges/s
   but not at 2/s (11.7 ms, fail). Players exchange at 20/s (UDP packets of
   32 bytes: negligible load).
+- Wire (Stage 2) [claude, filled in from the probe; Mat to confirm]: UDP port
+  47800 on the conductor. A request and its reply are the same 32 bytes, four
+  little-endian UInt64: sequence number, t1, t2, t3, each in nanoseconds of
+  that Mac's host clock (`CLOCK_UPTIME_RAW`, the clock AVPlayer's host time
+  follows). The player fills seq and t1; the conductor fills t2 on arrival and
+  t3 on reply. This is the probe's packet, so the probe and the app can stand
+  in for each other in tests. The conductor answers anyone who asks.
+- What setup shows [claude]: Conductor, "answering clock requests" with this
+  Mac's addresses and how many players asked in the last 10 s. Player, the
+  conductor's address, replies per second, the offset, its steadiness (95%
+  spread around the drift trend over the last 60 s, the measure of T11) and
+  the drift; or "no replies" after 5 s (T10 failing). The player also writes
+  this to the system log every 10 s, so a long run can be read back with
+  `log show`.
 
 API (PlayerCore, Stage 1, tested in `NetworkClockTests`):
 ```
@@ -223,6 +237,8 @@ ClockSample(t1:t2:t3:t4:).offset / .roundTrip
 ClockEstimator(window: 2, trendWindow: 60).add(_:) / .filtered / .drift / .conductorTime(host:)
 SyncMath.signedError(actual:expected:duration:) -> Double     // wrap-aware, signed
 SyncMath.correction(error:frame:) -> .none | .slew(rate:) | .resync
+ClockPacket(seq:t1:t2:t3:).bytes / ClockPacket(bytes:)          // Stage 2: the wire format
+SteadinessMeter(window: 60).add(time:offset:) / .p95Spread      // Stage 2: T11's measure, live
 ```
 
 ### One app, three modes (Mat's decision, 2026-10-21)
@@ -238,6 +254,15 @@ SyncMath.correction(error:frame:) -> .none | .slew(rate:) | .resync
 - How many displays a machine can drive is the hardware's limit, not the
   app's: it depends on the chip (on recent MacBook Pros, Pro chips drive fewer
   external displays than Max chips). Check Apple's specs for the machines used.
+- [claude] The mode belongs to the MACHINE, not the show: it is stored on each
+  Mac (with a Player's conductor address) and kept across launches. The same
+  show file can then be opened on a conductor or played standalone. Until
+  Stage 3, a Conductor or Player only runs the clock; playback still follows
+  the local clock.
+- [claude] macOS asks before an app may use the local network (Local Network
+  privacy), and the conductor may meet the firewall's prompt for incoming
+  connections. Both must be allowed. The bundle declares
+  `NSLocalNetworkUsageDescription` so the prompt says why.
 
 ### Show and media
 - The show file lives on the conductor. It names displays as (machine name,
