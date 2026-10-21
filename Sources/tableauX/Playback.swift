@@ -31,6 +31,25 @@ private final class LivePanel {
     }
 }
 
+/// [claude] The show's clock, as seen from this Mac (§ v3 › Show state).
+///
+/// Playback keeps every time (the start h0, a pause, the drift check's
+/// "where should it be") in SHOW TIME, and converts to this Mac's host clock
+/// only at the last step, when it tells an AVPlayer when to start. This is an
+/// ADAPTER: the same playback code runs standalone, as a conductor (show time
+/// is host time) or as a player (show time is the conductor's clock, from the
+/// estimate), with only this pair of conversions differing.
+struct ShowClock {
+    let toShow: (Double) -> Double?      // host seconds → show seconds; nil = no estimate yet
+    let toHost: (Double) -> Double?
+
+    static let local = ShowClock(toShow: { $0 }, toHost: { $0 })
+
+    static func following(_ client: ClockClient) -> ShowClock {
+        ShowClock(toShow: { client.conductorTime(host: $0) }, toHost: { client.hostTime(conductor: $0) })
+    }
+}
+
 /// Runs one show: a window per display, a player per panel, one shared clock.
 ///
 /// The sync design, which `proofs/sync-probe.swift` tested before this was
@@ -56,6 +75,11 @@ final class Playback {
 
     private let assignments: [(NSScreen, PanelConfig)]
     private let sync: SyncSettings
+    private let clock: ShowClock
+    /// Set on a conductor or standalone Mac, which decides the show's state and
+    /// reports each change here. Nil on a player, which follows (see `follow`).
+    private let onStateChange: ((ShowState) -> Void)?
+    private var leads: Bool { onStateChange != nil }
     private let onWindowsUp: () -> Void
     private let onEnd: () -> Void
     private var panels: [LivePanel] = []
@@ -65,8 +89,8 @@ final class Playback {
     // rest of the black windows covering the screens.
     private var windows: [PanelWindow] = []
     private let hostClock = CMClockGetHostTimeClock()
-    private var h0 = 0.0                 // shared start, host-clock seconds
-    private var pausedAt: Double?        // host time we paused at, if paused
+    private var h0 = 0.0                 // shared start, show time (seconds)
+    private var pausedAt: Double?        // show time we paused at, if paused
     private var timer: Timer?
     private var sleepAssertion: IOPMAssertionID = 0
     private var stopped = false
@@ -83,18 +107,38 @@ final class Playback {
     /// 2026-10-21). So the hand-over goes: new windows up, then old ones away.
     init(assignments: [(NSScreen, PanelConfig)],
          sync: SyncSettings,
+         clock: ShowClock = .local,
+         onStateChange: ((ShowState) -> Void)?,
          onWindowsUp: @escaping () -> Void,
          onEnd: @escaping () -> Void) {
         self.assignments = assignments
         self.sync = sync
+        self.clock = clock
+        self.onStateChange = onStateChange
         self.onWindowsUp = onWindowsUp
         self.onEnd = onEnd
     }
 
     private func hostNow() -> Double { CMClockGetTime(hostClock).seconds }
     private func cm(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: 1_000_000_000) }
+    private func showNow() -> Double? { clock.toShow(hostNow()) }
 
-    func start() async throws {
+    /// Starts every panel together at show time `at`, each at the position the
+    /// show has reached then (frame 0 if `at` is the start itself).
+    private func schedule(at: Double) {
+        guard let host = clock.toHost(at) else { return }
+        for p in panels { p.player?.setRate(1, time: cm(expected(p, atShow: at)), atHostTime: cm(host)) }
+    }
+
+    private func report(_ phase: ShowState.Phase) {
+        onStateChange?(ShowState(version: hostNanos(), phase: phase, start: h0, pausedAt: pausedAt ?? 0))
+    }
+
+    /// Starts the show. A leader (conductor, standalone) picks the start, 1 s
+    /// after its own panels are ready; a player passes the conductor's
+    /// `start` and joins it (`SyncMath.scheduledStart`).
+    func start(following start: Double? = nil) async throws {
+        if let start { h0 = start }
         // [claude] STAGE LOGGING: one line per step of the start sequence, each
         // stamped with the time since Play. A start that never happens then
         // says where it stopped (and how long each step took), instead of
@@ -157,10 +201,23 @@ final class Playback {
         }
         if stopped { stage("stopped before the start finished"); return }
 
-        h0 = hostNow() + 1
-        for p in players { p.setRate(1, time: .zero, atHostTime: cm(h0)) }
+        guard let now = showNow() else { throw CocoaError(.featureUnsupported) }   // no clock estimate yet
+        if leads {
+            h0 = now + 1
+            schedule(at: h0)
+            report(.playing)
+            stage("start scheduled 1 s ahead")
+        } else if pausedAt != nil {
+            // The conductor paused while this player was loading: wait for its resume.
+            stage("ready; conductor is paused")
+        } else {
+            // `follow` may have updated h0 while the files loaded: use the latest.
+            let at = SyncMath.scheduledStart(start: h0, now: now)
+            schedule(at: at)
+            stage(at == h0 ? "start scheduled on the conductor's start"
+                           : String(format: "joining %.2f s into the show", at - h0))
+        }
         started = true
-        stage("start scheduled 1 s ahead")
 
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkDrift() }
@@ -223,7 +280,7 @@ final class Playback {
     private func handle(_ e: NSEvent) {
         switch e.keyCode {
         case 53: stop()                  // Esc
-        case 49: togglePause()           // Space
+        case 49 where leads: togglePause()   // Space; a player's conductor decides (§ v3 › Show state)
         default: break
         }
     }
@@ -232,30 +289,62 @@ final class Playback {
         // [claude] Nothing to pause until the start is scheduled. Earlier, a
         // Space while files were still loading paused the players built so far,
         // then start() scheduled them anyway: playing, but marked as paused.
-        guard started else { return }
-        let players = panels.compactMap(\.player)
+        guard started, let now = showNow() else { return }
         if let paused = pausedAt {
             // Resume: shift the shared start by however long we were paused, then
             // restart every panel at the same future instant.
-            let h1 = hostNow() + 0.5
+            let h1 = now + 0.5
             h0 = SyncMath.resumedStart(start: h0, pausedAt: paused, resumeAt: h1)
-            for p in panels { if let pl = p.player { pl.setRate(1, time: cm(expected(p, at: h1)), atHostTime: cm(h1)) } }
             pausedAt = nil
+            schedule(at: h1)
+            report(.playing)
         } else {
-            let now = hostNow()
-            players.forEach { $0.pause() }
+            panels.forEach { $0.player?.pause() }
             pausedAt = now
+            report(.paused)
         }
     }
 
-    private func expected(_ p: LivePanel, at host: Double) -> Double {
-        SyncMath.expected(host: host, start: h0, duration: p.itemDuration)
+    /// [claude] A player brings its playback into line with the conductor's
+    /// state (§ v3 › Show state). RECONCILIATION: compare, and change only
+    /// what differs, so the once-a-second repeat of an unchanged state does
+    /// nothing at all. (Stopped is AppModel's job: it ends the Playback.)
+    func follow(_ s: ShowState) {
+        guard !leads else { return }
+        switch s.phase {
+        case .paused:
+            guard pausedAt == nil else { return }
+            pausedAt = s.pausedAt
+            panels.forEach { $0.player?.pause() }
+            NSLog("follow: paused")
+        case .playing:
+            // Same start and not paused: already doing this. (1 µs: the start
+            // travels as whole nanoseconds.)
+            guard pausedAt != nil || abs(s.start - h0) > 1e-6 else { return }
+            h0 = s.start
+            pausedAt = nil
+            // Still loading: start() will use the new h0 when it gets there.
+            guard started, let now = showNow() else { return }
+            let at = SyncMath.scheduledStart(start: h0, now: now)
+            schedule(at: at)
+            NSLog("follow: playing from %.2f s", at - h0)
+        case .stopped:
+            break
+        }
+    }
+
+    private func expected(_ p: LivePanel, atShow t: Double) -> Double {
+        SyncMath.expected(host: t, start: h0, duration: p.itemDuration)
     }
 
     /// Once a second: is every panel where the shared clock says it should be?
     private func checkDrift() {
         guard pausedAt == nil else { return }
         let now = hostNow()
+        // [claude] Where the panels should be is a question about SHOW time;
+        // where they are is read on the host clock. A player with no clock
+        // estimate (none yet) skips the check rather than guess.
+        guard let showNow = clock.toShow(now), let h1Show = clock.toShow(now + 0.5) else { return }
         for p in panels {
             guard let player = p.player, let tb = player.currentItem?.timebase else { continue }
             // Read the panel's time at exactly `now` by converting that host
@@ -263,16 +352,15 @@ final class Playback {
             // it?" a few microseconds later for each panel in turn.
             let actual = CMSyncConvertTime(cm(now), from: hostClock, to: tb).seconds
             let stalled = player.rate == 0
-            let out = SyncMath.needsCorrection(actual: actual, expected: expected(p, at: now),
+            let out = SyncMath.needsCorrection(actual: actual, expected: expected(p, atShow: showNow),
                                                duration: p.itemDuration, frame: p.frame, tolerance: sync.tolerance)
             // A stalled panel is frozen, not drifting: waiting out the grace
             // period would only leave a still picture on screen for longer.
             // The gate is checked first so it sees every check either way.
             if p.gate.check(out: out, now: now) || stalled {
-                let h1 = now + 0.5
-                player.setRate(1, time: cm(expected(p, at: h1)), atHostTime: cm(h1))
+                player.setRate(1, time: cm(expected(p, atShow: h1Show)), atHostTime: cm(now + 0.5))
                 p.corrections += 1
-                NSLog("panel resynced (\(stalled ? "stalled" : String(format: "%.1f ms out", abs(actual - expected(p, at: now)) * 1000)))")
+                NSLog("panel resynced (\(stalled ? "stalled" : String(format: "%.1f ms out", abs(actual - expected(p, atShow: showNow)) * 1000)))")
             }
         }
     }

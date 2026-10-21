@@ -113,6 +113,21 @@ public enum SyncMath {
         start + resumeAt - max(pausedAt, start)
     }
 
+    /// [claude] When to start a panel that should be playing from `start`
+    /// (§ v3 › Show state › Starting late). All times in show time.
+    ///
+    /// If the start is still at least `minLead` ahead, start exactly at it,
+    /// from frame 0: v1's scheduled start. If it is closer than that or has
+    /// passed (a player whose files took longer to load, or that joined
+    /// late), start `lead` from now instead, at whatever position the show has
+    /// reached by then (`expected(host: returned, start:, duration:)`). A
+    /// panel that is late then JOINS IN SYNC rather than starting from the
+    /// beginning, which would put it a whole load-time behind for the rest of
+    /// the show.
+    public static func scheduledStart(start: Double, now: Double, minLead: Double = 0.1, lead: Double = 0.5) -> Double {
+        start - now >= minLead ? start : now + lead
+    }
+
     /// How many back-to-back copies of a clip to put in one item.
     ///
     /// Enough to cover `cover` seconds, but never more than `maxSegments`, and

@@ -100,15 +100,25 @@ final class AppModel: ObservableObject {
     /// asks for. One place that owns the transition, so there is never a
     /// server and a client at once, or a socket left open from the last mode.
     func restartClock() {
+        // A show running on the old clock can't carry on with a new one.
+        if isPlaying { stop() }
         server?.stop(); server = nil
         client?.stop(); client = nil
+        follower = StateFollower()
+        dismissedVersion = nil
         do {
             switch mode {
             case .standalone: break
             case .conductor: server = try ClockServer()
             case .player:
                 let address = conductorAddress.trimmingCharacters(in: .whitespaces)
-                if !address.isEmpty { client = try ClockClient(conductor: address) }
+                if !address.isEmpty {
+                    // States arrive on the clock's receive thread; hop to the
+                    // main actor, which owns playback.
+                    client = try ClockClient(conductor: address) { [weak self] s in
+                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(s) } }
+                    }
+                }
             }
         } catch {
             clockStatus = "Clock: \(error)"
@@ -121,14 +131,48 @@ final class AppModel: ObservableObject {
 
     /// Once a second: refresh the status line; every 10 s, also log it, so a
     /// long run can be read back afterwards with `log show`.
+    // MARK: Following the conductor (v3 § Show state) [claude]
+
+    private var follower = StateFollower()
+    /// The state a person stopped this player during (Esc). It isn't
+    /// restarted until the conductor's state changes, or Esc would be undone
+    /// by the next once-a-second repeat.
+    private var dismissedVersion: UInt64?
+    private var refusedVersion: UInt64?
+
+    private func received(_ s: ShowState) {
+        guard follower.accept(s, now: Double(hostNanos()) / 1e9) else { return }
+        reconcile()
+    }
+
+    /// Bring this player into line with the conductor's latest state. Called
+    /// for every state received, including the once-a-second repeats, so
+    /// every branch must be a no-op when nothing has changed.
+    private func reconcile() {
+        guard mode == .player, let s = follower.current else { return }
+        switch s.phase {
+        case .stopped:
+            dismissedVersion = nil
+            if isPlaying { NSLog("follow: conductor stopped"); stop() }
+        case .playing, .paused:
+            if let playback {
+                playback.follow(s)
+            } else if s.phase == .playing, s.version != dismissedVersion {
+                startPlayback(following: s)
+            }
+        }
+    }
+
     private func updateClockStatus() {
         statusTicks += 1
+        server?.broadcast()          // the once-a-second repeat of the show state
         if let server {
             let players = server.players()
             clockStatus = "Conductor: answering clock requests on \(server.addresses.joined(separator: ", "))"
                 + (players.isEmpty ? ". No players yet." : ". Players: \(players.joined(separator: ", ")).")
         } else if let client {
             clockStatus = Self.describe(client.status)
+                + " · conductor " + (follower.current.map { "\($0.phase)" } ?? "not heard from yet")
         } else if mode == .player {
             clockStatus = "Player: type the conductor's address and press Return."
         } else if clockStatus.hasPrefix("Clock:") == false {
@@ -334,13 +378,41 @@ final class AppModel: ObservableObject {
     // MARK: Playback
 
     func play() {
+        // [claude] On a player, Play means "join the conductor's show", never
+        // "start on my own clock": that played out of sync (Mat, 0.1.2).
+        if mode == .player {
+            dismissedVersion = nil
+            if follower.current?.phase == .playing { reconcile() }
+            else { lastError = "This Mac is a Player: it starts when the conductor presses Play." }
+            return
+        }
+        startPlayback(following: nil)
+    }
+
+    /// Starts this Mac's part. `following` nil = this Mac leads (standalone or
+    /// conductor); otherwise it joins the conductor's state.
+    private func startPlayback(following s: ShowState?) {
         // [claude] Say why a Play does nothing. Before this, a refused Play was
         // a silent return, which is exactly what "nothing happened" looks like.
         NSLog("Play pressed: %d display(s), files: %@", displays.count,
               panels.prefix(displays.count).map { $0.file.map { ($0 as NSString).lastPathComponent } ?? "-" }.joined(separator: ", "))
         if isPlaying { NSLog("Play refused: already playing"); return }
         let blocking = problems.blocking
-        if !blocking.isEmpty { NSLog("Play refused: %@", blocking.joined(separator: " | ")); return }
+        if !blocking.isEmpty {
+            // A player retries every second; say so once per conductor state.
+            if s == nil || s?.version != refusedVersion {
+                NSLog("Play refused: %@", blocking.joined(separator: " | "))
+                if s != nil { lastError = "Can't follow the conductor: " + blocking.joined(separator: " ") }
+            }
+            refusedVersion = s?.version
+            return
+        }
+        var clock = ShowClock.local
+        if s != nil {
+            // No estimate of the conductor's clock yet: wait for the next state.
+            guard let client, client.hostTime(conductor: 0) != nil else { return }
+            clock = .following(client)
+        }
         let screens = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { s in
             Self.info(for: s).map { ($0.id, s) }
         })
@@ -348,13 +420,16 @@ final class AppModel: ObservableObject {
         lastError = nil
         // The setup window is hidden only once the panel windows are up, never
         // before: hiding the last visible window quits the app (see Playback.init).
-        let pb = Playback(assignments: assignments, sync: show.sync,
+        // A leader reports each state change; on a conductor that goes to the
+        // players, standalone it goes nowhere (server is nil).
+        let report: ((ShowState) -> Void)? = s != nil ? nil : { [weak self] state in self?.server?.publish(state) }
+        let pb = Playback(assignments: assignments, sync: show.sync, clock: clock, onStateChange: report,
                           onWindowsUp: { [weak self] in self?.setupWindows.forEach { $0.orderOut(nil) } },
                           onEnd: { [weak self] in self?.playbackEnded() })
         playback = pb
         isPlaying = true
         Task {
-            do { try await pb.start() }
+            do { try await pb.start(following: s?.start) }
             catch {
                 pb.stop()
                 lastError = "Couldn't start playback: \(error)"
@@ -374,5 +449,11 @@ final class AppModel: ObservableObject {
         playback = nil
         isPlaying = false
         setupWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+        // [claude] The conductor's Esc ends the show everywhere.
+        if mode == .conductor { server?.publish(ShowState(version: hostNanos(), phase: .stopped)) }
+        // A player stopped by a person (not by the conductor) stays out of this state.
+        if mode == .player, let current = follower.current, current.phase != .stopped {
+            dismissedVersion = current.version
+        }
     }
 }

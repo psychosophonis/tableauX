@@ -49,9 +49,8 @@ private enum UDP {
         return fd
     }
 
-    static func send(_ fd: Int32, _ packet: ClockPacket, to addr: sockaddr_in) {
+    static func send(_ fd: Int32, _ bytes: [UInt8], to addr: sockaddr_in) {
         var a = addr
-        let bytes = packet.bytes
         _ = bytes.withUnsafeBytes { b in
             withUnsafePointer(to: &a) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -61,8 +60,9 @@ private enum UDP {
         }
     }
 
-    /// One packet and its sender, or nil on timeout or a datagram that isn't ours.
-    static func receive(_ fd: Int32) -> (ClockPacket, sockaddr_in)? {
+    /// One datagram's bytes and its sender, or nil on timeout. The caller
+    /// decides what it is: 32 bytes is a clock packet, 40 a show state.
+    static func receive(_ fd: Int32) -> ([UInt8], sockaddr_in)? {
         var buf = [UInt8](repeating: 0, count: 64)    // larger than a packet, so oversize ones are seen and refused
         var from = sockaddr_in()
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -71,8 +71,8 @@ private enum UDP {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(fd, b.baseAddress, b.count, 0, $0, &len) }
             }
         }
-        guard n > 0, let p = ClockPacket(bytes: Array(buf[0..<n])) else { return nil }
-        return (p, from)
+        guard n > 0 else { return nil }
+        return (Array(buf[0..<n]), from)
     }
 
     /// Stops a component and frees its socket, in an order that is safe:
@@ -124,7 +124,8 @@ final class ClockServer: @unchecked Sendable {
     private let fd: Int32
     private let lock = NSLock()
     private var running = true
-    private var askers: [String: UInt64] = [:]       // player address → last request, host ns
+    private var askers: [String: (addr: sockaddr_in, last: UInt64)] = [:]   // player → its socket, last request (host ns)
+    private var state: ShowState?                    // what the show is doing (§ v3 › Show state)
 
     init() throws {
         fd = try UDP.open()
@@ -145,15 +146,39 @@ final class ClockServer: @unchecked Sendable {
 
     private func serve() {
         while lock.withLock({ running }) {
-            guard let (request, from) = UDP.receive(fd) else { continue }
-            var p = request
-            p.t2 = hostNanos()                           // as soon as it arrived
+            guard let (bytes, from) = UDP.receive(fd) else { continue }
+            let arrived = hostNanos()                    // t2: as soon as it arrived
+            guard var p = ClockPacket(bytes: bytes) else { continue }
+            p.t2 = arrived
             p.t3 = hostNanos()                           // as it leaves
-            UDP.send(fd, p, to: from)
+            UDP.send(fd, p.bytes, to: from)
             let name = UDP.name(from)
-            lock.withLock { askers[name] = p.t2 }
+            lock.withLock { askers[name] = (from, arrived) }
         }
         finished.signal()
+    }
+
+    /// The show's state changed: send it now and twice more over 0.3 s, so
+    /// one lost packet doesn't cost a player its start.
+    func publish(_ s: ShowState) {
+        lock.withLock { state = s }
+        broadcast()
+        for delay in [0.1, 0.3] { DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [self] in broadcast() } }
+    }
+
+    /// Sends the current state to every player heard from in the last 10 s.
+    /// Called on every change and once a second (AppModel's status timer), so
+    /// a player that joins or misses packets catches up within a second.
+    ///
+    /// Sending happens under the lock, and only while running: stop() clears
+    /// `running` under the same lock before it closes the socket, so a late
+    /// broadcast can never write to a closed (or reused) descriptor.
+    func broadcast() {
+        lock.withLock {
+            guard running, let state else { return }
+            let now = hostNanos()
+            for (_, a) in askers where Double(now - a.last) / 1e9 <= 10 { UDP.send(fd, state.bytes, to: a.addr) }
+        }
     }
 
     /// Players heard from in the last `seconds`.
@@ -163,7 +188,7 @@ final class ClockServer: @unchecked Sendable {
             // before its write got the lock, so none is later than `now`, and
             // the unsigned subtraction can't underflow (which would trap).
             let now = hostNanos()
-            return askers.filter { Double(now - $0.value) / 1e9 <= seconds }.keys.sorted()
+            return askers.filter { Double(now - $0.value.last) / 1e9 <= seconds }.keys.sorted()
         }
     }
 
@@ -202,8 +227,12 @@ final class ClockClient: @unchecked Sendable {
     private var lastReply: UInt64?
     private let started = hostNanos()
 
-    init(conductor: String) throws {
+    /// Called on the receive thread with every show state from the conductor.
+    private let onState: @Sendable (ShowState) -> Void
+
+    init(conductor: String, onState: @escaping @Sendable (ShowState) -> Void) throws {
         self.conductor = conductor
+        self.onState = onState
         var hints = addrinfo()
         hints.ai_family = AF_INET
         hints.ai_socktype = SOCK_DGRAM
@@ -231,7 +260,7 @@ final class ClockClient: @unchecked Sendable {
     private func send() {
         var seq: UInt64 = 0
         while lock.withLock({ running }) {
-            UDP.send(fd, ClockPacket(seq: seq, t1: hostNanos()), to: dest)
+            UDP.send(fd, ClockPacket(seq: seq, t1: hostNanos()).bytes, to: dest)
             seq += 1
             usleep(useconds_t(1e6 / Self.rate))
         }
@@ -243,8 +272,10 @@ final class ClockClient: @unchecked Sendable {
 
     private func receive() {
         while lock.withLock({ running }) {
-            guard let (p, _) = UDP.receive(fd) else { continue }
+            guard let (bytes, _) = UDP.receive(fd) else { continue }
             let t4 = hostNanos()
+            if let s = ShowState(bytes: bytes) { onState(s); continue }
+            guard let p = ClockPacket(bytes: bytes) else { continue }
             let host = Double(t4) / 1e9
             lock.withLock {
                 // One receive thread, so samples reach the estimator in order
@@ -262,6 +293,17 @@ final class ClockClient: @unchecked Sendable {
     /// Conductor time at this Mac's host time `host` (seconds), once known.
     /// Stage 3 schedules playback with this.
     func conductorTime(host: Double) -> Double? { lock.withLock { estimator.conductorTime(host: host) } }
+
+    /// This Mac's host time at conductor time `show`. The inverse of
+    /// conductorTime, using the offset as it is now: the offset changes by
+    /// parts per million, so over the seconds ahead that playback schedules,
+    /// "as it is now" is exact to well under a microsecond.
+    func hostTime(conductor show: Double) -> Double? {
+        lock.withLock {
+            let now = Double(hostNanos()) / 1e9
+            return estimator.conductorTime(host: now).map { show - ($0 - now) }
+        }
+    }
 
     var status: Status {
         lock.withLock {

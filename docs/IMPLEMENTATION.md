@@ -96,7 +96,8 @@ Risk order: the stages that could kill the idea come first.
 | 1 | Clock maths in PlayerCore: `ClockEstimator`, `SyncMath.correction` | unit tests; replay of 0a's real CSV | **done** (10 tests + 3 replay tests, mutation-checked) |
 | 1b | Show format with machines (one video per display) | ShowFile tests | **done 2026-10-21**: show v2 (`machines`, `sync`), v1 refused; tolerance + grace in the drift check; see below |
 | 2 | Clock service over UDP in the app (the probe as a component) | two Macs hold a steady estimate in the app | built, loopback checks pass; **two-Mac run pending (Mat)** |
-| 3 | Modes: Standalone / Conductor / Player; messages; conductor setup lists all machines | a 6-screen show set up from one MacBook | v3 decisions confirmed (Mat, 2026-10-21) |
+| 3a | Players follow the conductor's Play / Space / Esc (show state); each plays its own local part | conductor's Play starts both Macs together | **built 2026-10-21, build 0.1.3; two-Mac run pending (Mat)** |
+| 3b | Conductor sends each player its part; conductor setup lists all machines | a 6-screen show set up from one MacBook | |
 | 4 | Two-MacBook sweep test (T12), dropout test (T13) | within 1 frame; no visible desync | release 0.2 |
 | later | v2 multi-video | needs the six v2 ▸ decisions, decode-load probe (T9) | spec draft |
 
@@ -124,6 +125,22 @@ panel comes back, no reset after a resync, no one-machine fallback: each
 fails a test). App launches; setup window and playback with the new
 settings not yet checked by eye. Single-machine default loosened from v1's
 1 frame / 2 s to 3 frames / 5 s; set 1 / 0 for the old behaviour.
+
+Stage 3a (2026-10-21, `[claude]`), after Mat found on 0.1.2 that the player
+didn't start with the conductor (Stage 2 only ran the clock): the conductor
+publishes `ShowState` (on change ×3, then every 1 s); players reconcile.
+Playback works in show time through `ShowClock`. 56 tests. Checks on one Mac
+(two copies of the app on loopback, tolerance 1 frame, grace 0, 4K noise clip):
+- player started on the conductor's own start ("start scheduled on the
+  conductor's start"); ~18 s, no resyncs;
+- player launched 5 s late joined 5.24 s into the show, no resyncs.
+Not checked: pause/resume and Esc reaching the player (needs keys pressed on
+the conductor), and anything across two Macs: that is the next run (T12).
+Known: a player starts loading only when it hears "playing", so if its files
+take longer than the conductor's 1 s lead it joins a little late (in sync, but
+its first moments are black).
+A first loopback run was invalid: Mat's open 0.1.2 held the port, and the
+cleanup closed that copy too.
 
 Stage 2 (2026-10-21, `[claude]`): `ClockService.swift` (ClockServer /
 ClockClient, BSD sockets on dedicated threads, as the probe), `ClockPacket`
@@ -161,6 +178,8 @@ Each build handed out for testing gets the next patch number, so a report
 can name exactly what was run; 0.2.0 is the release once Stage 4 passes.
 - 0.1.2 (2026-10-21, commit 5f7ab71): Stage 2, clock service. For the
   two-MacBook clock run. Not published.
+- 0.1.3 (2026-10-21): Stage 3a, players follow the conductor. For the
+  two-MacBook start test and the sweep-line photo (T12). Not published.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

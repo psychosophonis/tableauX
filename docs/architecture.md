@@ -239,7 +239,45 @@ SyncMath.signedError(actual:expected:duration:) -> Double     // wrap-aware, sig
 SyncMath.correction(error:frame:) -> .none | .slew(rate:) | .resync
 ClockPacket(seq:t1:t2:t3:).bytes / ClockPacket(bytes:)          // Stage 2: the wire format
 SteadinessMeter(window: 60).add(time:offset:) / .p95Spread      // Stage 2: T11's measure, live
+ShowState(version:phase:start:pausedAt:).bytes / ShowState(bytes:) // Stage 3a
+StateFollower().accept(_:now:) -> Bool                          // Stage 3a: stale states ignored
+SyncMath.scheduledStart(start:now:lead:) -> (at:, position:)    // Stage 3a: start or join late
 ```
+
+### Show state (Stage 3a) [claude, 2026-10-21; Mat asked for 3a, details to confirm]
+- The conductor sends STATE, not commands: `ShowState {version, phase:
+  stopped | playing | paused, start, pausedAt}`, where `start` (v1's `h0`)
+  and `pausedAt` are in SHOW TIME, i.e. the conductor's host clock. It is
+  sent on every change (three times over 0.3 s) and again every second, to
+  every player heard from in the last 10 s, from the clock socket.
+- Why state: a player that misses packets, joins late or restarts converges
+  on the next one. A lost "Play" command would be lost for good, and UDP
+  does lose packets (0.2% on the uni Wi-Fi run).
+- Wire: 40 bytes, five little-endian UInt64: a magic word (`TBXSTATE` in
+  ASCII), version, phase (0 stopped, 1 playing, 2 paused), start ns,
+  pausedAt ns. The clock packet stays 32 bytes, so the size tells them apart
+  and the probe still works.
+- `version` is the conductor's host time of the change (it only grows). A
+  player ignores a state older than the last one it accepted (UDP can
+  reorder), unless it has accepted nothing for 5 s, which means the conductor
+  restarted.
+- A player RECONCILES: it compares the latest state with what it is doing
+  and changes only what differs, so receiving the same state again does
+  nothing. Playing → load its part and start in show time; paused → pause;
+  stopped → stop and return to setup. A player that joins during a pause
+  waits for the resume.
+- Starting late: if `start` has already passed when a player is ready (slow
+  file load, late join), it starts 0.5 s later at the position the show has
+  reached, so it joins in sync rather than from the beginning.
+- Keys on a player: Esc stops that player and leaves it stopped until the
+  conductor's state next changes; Space does nothing (the conductor decides).
+- Playback works in show time everywhere: on a conductor or standalone Mac
+  show time is host time; on a player it is the clock estimate. The drift
+  check (§ Sync) compares panels against show time, with the show's
+  tolerance and grace.
+- TEMPORARY (3a): each player plays its own part from a show file saved on
+  that Mac (§ Show file › which machine). Sending each player its part from
+  the conductor's show (§ Show and media) is 3b.
 
 ### One app, three modes (Mat's decision, 2026-10-21)
 - The same app runs everywhere, in one of three modes, chosen in setup:

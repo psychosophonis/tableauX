@@ -87,6 +87,28 @@ final class SyncMathTests: XCTestCase {
         XCTAssertFalse(SyncMath.needsCorrection(actual: 5.02, expected: 5, duration: 60, frame: frame, tolerance: 0))
     }
 
+    // [claude] Stage 3a: start on time when there's time, else join in sync.
+    func testStartStillAheadStartsOnItFromZero() {
+        let at = SyncMath.scheduledStart(start: 1001, now: 1000)
+        XCTAssertEqual(at, 1001)
+        XCTAssertEqual(SyncMath.expected(host: at, start: 1001, duration: 60), 0, accuracy: 1e-9)
+    }
+
+    func testStartPassedJoinsWhereTheShowHasGot() {
+        // Files took 3 s longer than the conductor's 1 s lead.
+        let at = SyncMath.scheduledStart(start: 1001, now: 1004)
+        XCTAssertEqual(at, 1004.5)
+        XCTAssertEqual(SyncMath.expected(host: at, start: 1001, duration: 60), 3.5, accuracy: 1e-9)
+        // And a very late join wraps onto the loop.
+        let late = SyncMath.scheduledStart(start: 1001, now: 1100)
+        XCTAssertEqual(SyncMath.expected(host: late, start: 1001, duration: 60), 39.5, accuracy: 1e-9)
+    }
+
+    func testStartTooCloseToScheduleIsTreatedAsPassed() {
+        // 50 ms ahead is too close to schedule reliably: join 0.5 s on instead.
+        XCTAssertEqual(SyncMath.scheduledStart(start: 1000.05, now: 1000), 1000.5)
+    }
+
     // [claude] DriftGate: grace 0 is v1 (correct at the first check out).
     func testZeroGraceCorrectsAtOnce() {
         var gate = DriftGate(grace: 0)

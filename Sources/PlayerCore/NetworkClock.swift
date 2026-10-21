@@ -168,3 +168,69 @@ public struct SteadinessMeter {
         return spread[min(spread.count - 1, Int(Double(spread.count - 1) * 0.95))]
     }
 }
+
+/// [claude] What the conductor's show is doing, sent to every player
+/// (docs/architecture.md § v3 › Show state). Times are SHOW TIME: the
+/// conductor's host clock, in seconds.
+///
+/// This is STATE REPLICATION rather than a command stream: the message says
+/// "this is how things are", not "do this now". Applying it twice is the same
+/// as applying it once (it is IDEMPOTENT), so the conductor can simply repeat
+/// it, and a player that missed a packet or joined late is put right by the
+/// next one. With commands, a single lost "Play" would leave a player dark.
+public struct ShowState: Equatable, Sendable {   // Sendable: plain values, safe to hand between threads
+    public enum Phase: UInt64, Sendable { case stopped = 0, playing = 1, paused = 2 }
+
+    public static let size = 40
+    /// "TBXSTATE" in ASCII: a datagram that happens to be 40 bytes but isn't
+    /// ours is refused instead of being read as a show starting.
+    static let magic: UInt64 = 0x4554_4154_5358_4254
+
+    public var version: UInt64     // conductor host ns when the state changed; only grows
+    public var phase: Phase
+    public var start: Double       // v1's h0, in show time
+    public var pausedAt: Double    // show time; meaningful when paused
+
+    public init(version: UInt64, phase: Phase, start: Double = 0, pausedAt: Double = 0) {
+        self.version = version; self.phase = phase; self.start = start; self.pausedAt = pausedAt
+    }
+
+    public var bytes: [UInt8] {
+        let words = [Self.magic, version, phase.rawValue,
+                     UInt64(max(start, 0) * 1e9), UInt64(max(pausedAt, 0) * 1e9)]
+        return words.flatMap { v in (0..<8).map { UInt8(truncatingIfNeeded: v.littleEndian >> ($0 * 8)) } }
+    }
+
+    public init?(bytes: [UInt8]) {
+        guard bytes.count == Self.size else { return nil }
+        func word(_ i: Int) -> UInt64 { (0..<8).reduce(0) { $0 | UInt64(bytes[i * 8 + $1]) << ($1 * 8) } }
+        guard word(0) == Self.magic, let phase = Phase(rawValue: word(2)) else { return nil }
+        self.init(version: word(1), phase: phase, start: Double(word(3)) / 1e9, pausedAt: Double(word(4)) / 1e9)
+    }
+}
+
+/// [claude] Which received state is current (§ v3 › Show state).
+///
+/// UDP may deliver packets out of order, so an old "paused" could arrive after
+/// a newer "playing" and pause a player by mistake. Each state carries a
+/// version that only grows, and an older one is ignored. The exception is a
+/// conductor that restarted: its versions start lower (its clock restarted
+/// with the Mac), so after `takeover` seconds with nothing accepted, the next
+/// state is accepted whatever its version. A reordered packet is never 5 s
+/// late on a local network; a restarted conductor is.
+public struct StateFollower {
+    public static let takeover = 5.0
+    public private(set) var current: ShowState?
+    private var acceptedAt = -Double.infinity
+
+    public init() {}
+
+    /// True if `state` is now the current state. A repeat of the current state
+    /// is accepted too (it keeps the takeover timer fresh).
+    public mutating func accept(_ state: ShowState, now: Double) -> Bool {
+        if let current, state.version < current.version, now - acceptedAt < Self.takeover { return false }
+        current = state
+        acceptedAt = now
+        return true
+    }
+}

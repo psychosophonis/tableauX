@@ -167,6 +167,47 @@ final class NetworkClockTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(m.p95Spread), 0, accuracy: 1e-9)
     }
 
+    // MARK: Stage 3a [claude]
+
+    func testShowStateRoundTrips() {
+        for s in [ShowState(version: 9, phase: .playing, start: 773_112.5, pausedAt: 0),
+                  ShowState(version: 10, phase: .paused, start: 773_112.5, pausedAt: 773_140.25),
+                  ShowState(version: 11, phase: .stopped)] {
+            let back = ShowState(bytes: s.bytes)
+            XCTAssertEqual(s.bytes.count, 40)
+            XCTAssertEqual(back?.phase, s.phase)
+            XCTAssertEqual(back?.version, s.version)
+            XCTAssertEqual(try XCTUnwrap(back?.start), s.start, accuracy: 1e-9)       // ns precision
+            XCTAssertEqual(try XCTUnwrap(back?.pausedAt), s.pausedAt, accuracy: 1e-9)
+        }
+    }
+
+    /// A clock packet can never be read as a state (different size), and 40
+    /// bytes without the magic word, or with an unknown phase, aren't ours.
+    func testOnlyRealStatesAreRead() {
+        XCTAssertNil(ShowState(bytes: ClockPacket(seq: 1, t1: 2).bytes))
+        XCTAssertNil(ShowState(bytes: [UInt8](repeating: 0, count: 40)))
+        var bad = ShowState(version: 1, phase: .playing).bytes
+        bad[16] = 7                                                              // phase word = 7
+        XCTAssertNil(ShowState(bytes: bad))
+    }
+
+    func testFollowerIgnoresAnOlderStateThatArrivesLate() {
+        var f = StateFollower()
+        XCTAssertTrue(f.accept(ShowState(version: 2, phase: .playing), now: 100))
+        XCTAssertFalse(f.accept(ShowState(version: 1, phase: .paused), now: 100.2))   // reordered
+        XCTAssertEqual(f.current?.phase, .playing)
+        XCTAssertTrue(f.accept(ShowState(version: 2, phase: .playing), now: 101))     // the repeat
+        XCTAssertTrue(f.accept(ShowState(version: 3, phase: .paused), now: 102))
+    }
+
+    func testFollowerAcceptsARestartedConductorAfterTheTakeover() {
+        var f = StateFollower()
+        XCTAssertTrue(f.accept(ShowState(version: 900, phase: .playing), now: 100))
+        XCTAssertFalse(f.accept(ShowState(version: 5, phase: .stopped), now: 104.9))
+        XCTAssertTrue(f.accept(ShowState(version: 5, phase: .stopped), now: 105.1))
+    }
+
     func testNoSpreadFromTooFewPoints() {
         var m = SteadinessMeter()
         for i in 0..<9 { m.add(time: Double(i), offset: 0) }
