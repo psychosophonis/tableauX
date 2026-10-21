@@ -245,7 +245,11 @@ ClockPacket(seq:t1:t2:t3:).bytes / ClockPacket(bytes:)          // Stage 2: the 
 SteadinessMeter(window: 60).add(time:offset:) / .p95Spread      // Stage 2: T11's measure, live
 ShowState(version:phase:start:pausedAt:).bytes / ShowState(bytes:) // Stage 3a
 StateFollower().accept(_:now:) -> Bool                          // Stage 3a: stale states ignored
-SyncMath.scheduledStart(start:now:lead:) -> (at:, position:)    // Stage 3a: start or join late
+SyncMath.scheduledStart(start:now:lead:) -> Double              // Stage 3a: start or join late
+FolderScan.videos(_:) / .assign(folder:files:displays:)         // v4 P1: natural sort, overflow (T14)
+PlaylistMerge.merge(_:with:) / .length(of:in:)                  // v4 P1: works joined by folder name (T14)
+Timeline(entries:settings:).position(at:anchor:start:)          // v4 P1: pure timeline (T15)
+Timeline.screenPosition(elapsed:workLength:fileDuration:shorter:)
 ```
 
 ### Show state (Stage 3a) [claude, 2026-10-21; Mat asked for 3a, details to confirm]
@@ -441,7 +445,7 @@ Show {                                  // the conductor's file
 Work {
   name: string                          // = the folder name on every Mac
   screens: { machineName: [Panel] }     // per Mac, index = that Mac's display - 1
-  repeat: { once } | { times: int } | { untilNext }
+  repeat: int ≥ 1 | "untilNext"        // 1 = once; [claude] stored readably: 1, 3, "untilNext"
   shorter: "black" | "loop"
 }
 Panel { file: string | null, audio: bool, scaling }   // file relative to that Mac's media folder
@@ -485,6 +489,8 @@ swift build && swift test
 ```
 
 Tests: `DisplayOrderTests`, `PlacementTests`, `SyncMathTests`, `ShowFileTests`,
-`NetworkClockTests`, `ClockReplayTests` (the real Wi-Fi recording).
+`NetworkClockTests`, `ClockReplayTests` (the real Wi-Fi recording),
+`FolderScanTests`, `PlaylistMergeTests`, `TimelineTests` (v4).
+Probes: also `proofs/clock-probe.swift` (T10, T11), `proofs/work-switch-probe.swift` (v4 riskiest assumption).
 Probes: `proofs/sync-probe.swift` (T1, T2, T4 on this machine).
 Lab checklist (T4 on the Mac mini, T6): `docs/LAB-TEST.md`.

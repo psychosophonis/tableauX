@@ -99,8 +99,8 @@ Risk order: the stages that could kill the idea come first.
 | 3a | Players follow the conductor's Play / Space / Esc (show state); each plays its own local part | conductor's Play starts both Macs together | **built 2026-10-21, build 0.1.3; two-Mac run pending (Mat)** |
 | 3b | Conductor sends each player its part; conductor setup lists all machines | a 6-screen show set up from one MacBook | |
 | 3a ✓ | Two-MacBook run on 0.1.3 | — | **Mat 2026-10-21: "working beautifully"** (by eye; T12 photo and log not yet recorded) |
-| P0 | Probe: cycle 3 × 4K items every 10 s for 1 h (load time, memory) | v4 riskiest assumption | not started |
-| P1 | PlayerCore: v4 model, folder scan + inventory merge (T14), timeline (T15) | tests | v4 confirmed (Mat, 2026-10-21) |
+| P0 | Probe: cycle 3 × 4K items every 10 s for 1 h (load time, memory) | v4 riskiest assumption | probe built, control fails as designed; 1 h run on this Mac in progress; Mac mini run with the tech |
+| P1 | PlayerCore: v4 model, folder scan + inventory merge (T14), timeline (T15) | tests | **done** (19 tests, mutation-checked); show file v3 moves with the app in P2 |
 | P2 | One-Mac playlist playback: gap, auto-advance, →/← | a class playlist plays on one Mac | |
 | P3 | Network: TCP channel; inventories → merged playlist → players; state with work index; file check | T16, T17 | |
 | P4 | Setup: playlist editor, folder import, per-work settings | a class set up in minutes | |
@@ -132,6 +132,20 @@ panel comes back, no reset after a resync, no one-machine fallback: each
 fails a test). App launches; setup window and playback with the new
 settings not yet checked by eye. Single-machine default loosened from v1's
 1 frame / 2 s to 3 frames / 5 s; set 1 / 0 for the old behaviour.
+
+v4 P0/P1 (2026-10-21, `[claude]`):
+- `proofs/work-switch-probe.swift`: builds and tears down a work's players
+  every 10 s. Control (`--leak`) fails as it must (+195 MB/h vs a 25 MB/h
+  limit). Short runs with a 60 Mbit/s 4K clip ×3: load 0.16 s, ~30 MB,
+  full frame rate.
+- FINDING, for submission guidelines: `testmedia/noise-3840x2160-10s.mp4` is
+  679 Mbit/s H.264; two decode at full rate on the M3 Pro, three drop to
+  ~3 fps each. Real 4K H.264 is far below that, but a student export at an
+  extreme bitrate could do this; the Mac mini's limit is unknown.
+- `Playlist.swift`: folder scan, inventory merge, timeline (19 tests). A
+  mutant that dropped the gaps from the loop cycle first SURVIVED: the test
+  compared against one day, which happens to land in the same place either
+  way. Replaced with an explicit expected value; the mutant now fails.
 
 Stage 3a (2026-10-21, `[claude]`), after Mat found on 0.1.2 that the player
 didn't start with the conductor (Stage 2 only ran the clock): the conductor
