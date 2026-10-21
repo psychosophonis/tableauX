@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import PlayerCore
+import SwiftUI              // [claude] for Binding (panelBinding)
 import SystemConfiguration
 import UniformTypeIdentifiers
 
@@ -35,8 +36,282 @@ final class AppModel: ObservableObject {
     /// Which of the show's machines this Mac plays; nil = the show has no part for it.
     var machineIndex: Int? { show.machineIndex(named: Self.thisMac) }
 
-    /// This Mac's panels, in display order. Empty when the show has no part for it.
-    var panels: [PanelConfig] { machineIndex.map { show.machines[$0].panels } ?? [] }
+    /// [claude] The name this Mac's screens are filed under in each work: its
+    /// machine entry's name, which may be another Mac's name when a one-Mac
+    /// show is opened somewhere else (§ Show file › which machine).
+    var machineName: String? { machineIndex.map { show.machines[$0].name } }
+
+    // MARK: Playlist (v4) [claude]
+
+    /// The work whose panels setup is showing.
+    @Published var selectedWork = 0
+
+    /// Files a scan found but couldn't place (more files than displays), per
+    /// work, for setup's warning. Not saved: the next scan finds them again.
+    @Published private(set) var leftOver: [String: [String]] = [:]
+
+    /// This Mac's media folder (§ v4 › Getting works in): a setting per Mac,
+    /// like the mode, because each Mac holds its own files.
+    @Published var mediaFolder = "" {
+        didSet { UserDefaults.standard.set(mediaFolder, forKey: mediaKey) }
+    }
+    private let mediaKey = "mediaFolder"
+
+    /// A panel's file as a full path: relative paths are inside the media folder.
+    func resolve(_ file: String) -> String {
+        file.hasPrefix("/") ? file : (mediaFolder as NSString).appendingPathComponent(file)
+    }
+
+    /// This Mac's panels for work `w`, one per display, in display order.
+    func panels(of w: Int) -> [PanelConfig] {
+        guard show.works.indices.contains(w), let name = machineName else { return [] }
+        var ps = show.works[w].screens[name] ?? []
+        while ps.count < displays.count { ps.append(PanelConfig()) }
+        return ps
+    }
+
+    /// The selected work's panels on this Mac. Empty with no work or no part.
+    var panels: [PanelConfig] { panels(of: selectedWork) }
+
+    /// A two-way BINDING to one of the selected work's panels on this Mac,
+    /// for setup's controls. The panels live in a dictionary inside an array
+    /// inside the show, which SwiftUI's `$` paths can't reach through an
+    /// optional key, so the get and set are written out here.
+    func panelBinding(_ i: Int) -> Binding<PanelConfig> {
+        Binding(get: { [weak self] in
+            guard let self, i < self.panels.count else { return PanelConfig() }
+            return self.panels[i]
+        }, set: { [weak self] new in self?.setPanel(i, new) })
+    }
+
+    private func setPanel(_ i: Int, _ p: PanelConfig) {
+        guard show.works.indices.contains(selectedWork), let name = machineName else { return }
+        var ps = panels
+        guard i < ps.count else { return }
+        ps[i] = p
+        show.works[selectedWork].screens[name] = ps
+    }
+
+    /// One play of work `w` on this Mac: its longest file here (§ v4 ›
+    /// Playing). P2 is one Mac; P3 takes the longest across Macs.
+    func length(of w: Int) -> Double {
+        panels(of: w).prefix(displays.count).compactMap { $0.file.flatMap { media[resolve($0)]?.duration } }.max() ?? 0
+    }
+
+    func addWork() {
+        show.works.append(Work(name: "Work \(show.works.count + 1)"))
+        selectedWork = show.works.count - 1
+    }
+
+    func removeWork(_ w: Int) {
+        guard show.works.indices.contains(w) else { return }
+        show.works.remove(at: w)
+        selectedWork = min(selectedWork, max(show.works.count - 1, 0))
+    }
+
+    func moveWork(_ w: Int, by step: Int) {
+        let to = w + step
+        guard show.works.indices.contains(w), show.works.indices.contains(to) else { return }
+        show.works.swapAt(w, to)
+        selectedWork = to
+    }
+
+    func chooseMediaFolder() {
+        let p = NSOpenPanel()
+        p.canChooseFiles = false
+        p.canChooseDirectories = true
+        guard p.runModal() == .OK, let url = p.url else { return }
+        mediaFolder = url.path
+    }
+
+    /// Scans the media folder: each subfolder is a work, its videos go on
+    /// this Mac's displays in name order (FolderScan), merged into the
+    /// playlist so works already set up keep their settings (PlaylistMerge).
+    /// Only the listing is read here; durations load in the background.
+    func scan() {
+        guard !mediaFolder.isEmpty, let name = machineName else { return }
+        let fm = FileManager.default
+        guard let folders = try? fm.contentsOfDirectory(atPath: mediaFolder) else {
+            lastError = "Couldn't read the media folder \(mediaFolder)."
+            return
+        }
+        var inventory: [String: [InventoryFile]] = [:]
+        var left: [String: [String]] = [:]
+        for folder in folders where !folder.hasPrefix(".") {
+            let path = (mediaFolder as NSString).appendingPathComponent(folder)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue,
+                  let files = try? fm.contentsOfDirectory(atPath: path) else { continue }
+            let videos = FolderScan.videos(files)
+            guard !videos.isEmpty else { continue }
+            // Durations aren't known yet; the merge only needs the names.
+            inventory[folder] = videos.map { InventoryFile(name: $0, duration: 0) }
+            let extra = FolderScan.assign(folder: folder, files: videos, displays: displays.count).leftOver
+            if !extra.isEmpty { left[folder] = extra }
+        }
+        show.works = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: displays.count, folders: inventory)])
+        leftOver = left
+        lastError = nil
+        NSLog("scan: %d work(s) in %@", inventory.count, mediaFolder)
+        fillNewDisplays()
+        loadAllInfo()
+    }
+
+    /// [claude] Gives each work's unset displays its folder's unused videos
+    /// (FolderScan.fill; Mat, 2026-10-21), so a display plugged in after the
+    /// scan, or a show opened on a Mac with more displays, isn't left black
+    /// while files sit unused. Also brings the left-over warnings up to date.
+    ///
+    /// A work's folder is the one folder its files on this Mac are in (a
+    /// media folder subfolder, or an imported folder); with no files yet,
+    /// `<media folder>/<work name>`. Files from several folders mean the
+    /// work was set by hand, so it is left alone.
+    private func fillNewDisplays() {
+        guard let name = machineName else { return }
+        for w in show.works.indices {
+            let set = show.works[w].screens[name] ?? []
+            let parents = Set(set.compactMap(\.file).map { ($0 as NSString).deletingLastPathComponent })
+            guard let folder = parents.count == 1 ? parents.first : parents.isEmpty && !mediaFolder.isEmpty ? show.works[w].name : nil,
+                  !folder.isEmpty,
+                  let files = try? FileManager.default.contentsOfDirectory(atPath: resolve(folder)) else { continue }
+            let (panels, left) = FolderScan.fill(set, folder: folder, files: files, displays: displays.count)
+            if panels != set {
+                show.works[w].screens[name] = panels
+                NSLog("fill: %@ now on %d display(s)", show.works[w].name, panels.count)
+            }
+            leftOver[show.works[w].name] = left.isEmpty ? nil : left
+        }
+    }
+
+    /// Reads the length etc. of every file this Mac plays, in every work.
+    private func loadAllInfo() {
+        for w in show.works.indices {
+            panels(of: w).compactMap(\.file).map(resolve).filter(fileExists).forEach(loadInfo)
+        }
+    }
+
+    // MARK: Collect and import (§ v4 › Collecting and importing) [claude]
+
+    /// One line of collect progress for setup; nil when no collect is running.
+    @Published private(set) var collecting: String?
+
+    /// Adds the works in a folder chosen from anywhere, LINKED IN PLACE (Mat):
+    /// full paths to the files where they are, nothing copied.
+    func importFolder() {
+        guard let name = machineName else { return }
+        let p = NSOpenPanel()
+        p.canChooseFiles = false
+        p.canChooseDirectories = true
+        p.prompt = "Import"
+        guard p.runModal() == .OK, let url = p.url else { return }
+        let fm = FileManager.default
+        guard let listing = try? fm.contentsOfDirectory(atPath: url.path) else {
+            lastError = "Couldn't read \(url.path)."
+            return
+        }
+        var files: [String] = [], subfolders: [String: [String]] = [:]
+        for item in listing {
+            let path = url.appendingPathComponent(item).path
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                subfolders[item] = (try? fm.contentsOfDirectory(atPath: path)) ?? []
+            } else {
+                files.append(item)
+            }
+        }
+        let r = FolderImport.works(root: url.path, rootFiles: files, subfolders: subfolders, machine: name,
+                                   displays: displays.count, existing: Set(show.works.map(\.name)))
+        show.works += r.works
+        leftOver.merge(r.leftOver) { $1 }
+        if !r.works.isEmpty { selectedWork = show.works.count - r.works.count }
+        lastError = r.works.isEmpty && r.skipped.isEmpty ? "No video files in \(url.lastPathComponent) or the folders inside it."
+            : r.skipped.isEmpty ? nil
+            : "Already in the playlist, so not imported: \(r.skipped.joined(separator: ", "))."
+        NSLog("import: %d work(s) from %@", r.works.count, url.path)
+        loadAllInfo()
+    }
+
+    /// Copies this Mac's files for the whole show into a new folder named
+    /// after the show, with the show file rewritten to point at the copies.
+    func collectShow() {
+        let showName = showPath?.deletingPathExtension().lastPathComponent ?? "Untitled"
+        guard let dir = chooseCollectFolder() else { return }
+        let root = dir.appendingPathComponent(Collect.uniqueName(showName, taken: Self.namesIn(dir)))
+        collect(Array(show.works.indices), into: root, showFile: "\(showName).\(Self.showExtension)")
+    }
+
+    /// Copies this Mac's files for one work into a folder named after it:
+    /// a folder that Import (or a scan) reads back as that work.
+    func collectWork(_ w: Int) {
+        guard show.works.indices.contains(w), let dir = chooseCollectFolder() else { return }
+        collect([w], into: dir, showFile: nil)
+    }
+
+    private func chooseCollectFolder() -> URL? {
+        let p = NSOpenPanel()
+        p.canChooseFiles = false
+        p.canChooseDirectories = true
+        p.canCreateDirectories = true
+        p.prompt = "Collect Here"
+        p.message = "Choose where to put the collected files. The originals are left where they are."
+        return p.runModal() == .OK ? p.url : nil
+    }
+
+    private static func namesIn(_ dir: URL) -> Set<String> {
+        Set(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).map { $0.lowercased() })
+    }
+
+    /// Plans the copies (PlayerCore's Collect, a pure function), checks them
+    /// against the disk, then copies OFF THE MAIN THREAD: gigabytes of video
+    /// take minutes, and the setup window must keep redrawing meanwhile.
+    private func collect(_ indices: [Int], into root: URL, showFile: String?) {
+        guard collecting == nil, let name = machineName else { return }
+        let plan = Collect.plan(works: indices.map { show.works[$0] }, machine: name, resolve: resolve,
+                                takenFolders: Self.namesIn(root))
+        let fm = FileManager.default
+        let missing = plan.copies.filter { !fileExists($0.source) }
+        let copies = plan.copies.filter { fileExists($0.source) }
+        // Check the space BEFORE copying: running out half way would leave a
+        // half-made archive and a full disk, on a Mac that may be mid-show.
+        let bytes = copies.reduce(Int64(0)) { $0 + ((try? fm.attributesOfItem(atPath: $1.source)[.size] as? Int64) ?? 0) }
+        let free = (try? root.deletingLastPathComponent().resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage) ?? Int64.max
+        if bytes > free {
+            lastError = "Not enough space: collecting needs \(Self.gigabytes(bytes)), the disk has \(Self.gigabytes(free)) free."
+            return
+        }
+        var archived = show
+        archived.works = plan.works
+        let showData = showFile == nil ? nil : try? ShowFile.encode(archived)
+        collecting = "Collecting 0 of \(copies.count) files…"
+        NSLog("collect: %d file(s), %@ into %@", copies.count, Self.gigabytes(bytes), root.path)
+        Task.detached {
+            let fm = FileManager.default
+            var failure: String?
+            do {
+                try fm.createDirectory(at: root, withIntermediateDirectories: true)
+                for (n, c) in copies.enumerated() {
+                    let dest = root.appendingPathComponent(c.dest)
+                    try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try fm.copyItem(atPath: c.source, toPath: dest.path)
+                    await MainActor.run { self.collecting = "Collecting \(n + 1) of \(copies.count) files…" }
+                }
+                if let showFile, let showData { try showData.write(to: root.appendingPathComponent(showFile)) }
+            } catch {
+                failure = "Collecting stopped: \(error.localizedDescription) The files copied so far are in \(root.path)."
+            }
+            await MainActor.run { [failure] in
+                self.collecting = nil
+                self.lastError = failure ?? (missing.isEmpty ? nil
+                    : "Collected into \(root.path), except \(missing.count) file(s) not found: "
+                      + missing.map(\.source).joined(separator: ", ") + ".")
+                NSLog("collect: %@", failure ?? "done")
+                if failure == nil { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+            }
+        }
+    }
+
+    private static func gigabytes(_ b: Int64) -> String { String(format: "%.1f GB", Double(b) / 1e9) }
 
     private var playback: Playback?
     private let lastShowKey = "lastShowPath"
@@ -83,6 +358,7 @@ final class AppModel: ObservableObject {
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChanged() }
         }
+        mediaFolder = UserDefaults.standard.string(forKey: mediaKey) ?? ""
         if let path = UserDefaults.standard.string(forKey: lastShowKey) {
             open(URL(fileURLWithPath: path))
         }
@@ -217,17 +493,24 @@ final class AppModel: ObservableObject {
     func launched() {
         guard !hasLaunched else { return }
         hasLaunched = true
-        if show.playOnLaunch { play() }
+        guard show.playOnLaunch else { return }
+        Task {
+            await infoLoaded()
+            play()
+        }
     }
 
     // MARK: Displays
 
     private func refreshDisplays() {
         displays = DisplayOrder.sorted(NSScreen.screens.compactMap(Self.info(for:)))
-        // One panel per display. Extra panels from a show made on a bigger array
-        // are kept (not deleted) so saving on this machine doesn't lose them.
-        guard let mi = machineIndex else { return }
-        while show.machines[mi].panels.count < displays.count { show.machines[mi].panels.append(PanelConfig()) }
+        // [claude] The show records how many displays this Mac has (§ v4 ›
+        // Model). Panels are padded per work when read (`panels(of:)`), and
+        // extra panels from a bigger array are kept, so saving on this
+        // machine doesn't lose them. New displays take unused files.
+        fillNewDisplays()
+        guard let mi = machineIndex, show.machines[mi].displays != displays.count else { return }
+        show.machines[mi].displays = displays.count
     }
 
     private func screensChanged() {
@@ -264,28 +547,50 @@ final class AppModel: ObservableObject {
 
     // MARK: Panels
 
+    /// [claude] A file chosen by hand is stored relative to the media folder
+    /// when it is inside it (so the show moves with the folder), else as a
+    /// full path.
     func choose(panel i: Int) {
         let p = NSOpenPanel()
         p.allowedContentTypes = [.movie]
-        guard p.runModal() == .OK, let url = p.url, let mi = machineIndex else { return }
-        show.machines[mi].panels[i].file = url.path
+        if !mediaFolder.isEmpty { p.directoryURL = URL(fileURLWithPath: mediaFolder) }
+        guard p.runModal() == .OK, let url = p.url, i < panels.count else { return }
+        let prefix = mediaFolder.hasSuffix("/") ? mediaFolder : mediaFolder + "/"
+        var panel = panels[i]
+        panel.file = !mediaFolder.isEmpty && url.path.hasPrefix(prefix) ? String(url.path.dropFirst(prefix.count)) : url.path
+        setPanel(i, panel)
         loadInfo(url.path)
     }
 
     func clear(panel i: Int) {
-        if let mi = machineIndex { show.machines[mi].panels[i].file = nil }
+        guard i < panels.count else { return }
+        var panel = panels[i]
+        panel.file = nil
+        setPanel(i, panel)
     }
 
     private func loadInfo(_ path: String) {
-        guard media[path] == nil else { return }
-        Task {
+        guard media[path] == nil, infoLoads[path] == nil else { return }
+        infoLoads[path] = Task {
             do {
                 media[path] = try await Self.readInfo(URL(fileURLWithPath: path))
                 unreadable.remove(path)
             } catch {
                 unreadable.insert(path)
             }
+            infoLoads[path] = nil
         }
+    }
+
+    /// [claude] File reads in progress, kept so Play on launch can wait for
+    /// them: in v4 a work's length (its longest file) times the playlist, so
+    /// a show can't start until its files are measured. Without the wait,
+    /// Play on launch was refused with "still reading" (found in the P2 run,
+    /// 2026-10-21) and the show never started.
+    private var infoLoads: [String: Task<Void, Never>] = [:]
+
+    private func infoLoaded() async {
+        while let pending = infoLoads.values.first { await pending.value }
     }
 
     static func readInfo(_ url: URL) async throws -> MediaInfo {
@@ -307,28 +612,52 @@ final class AppModel: ObservableObject {
 
     /// Problems that block playback (missing or unreadable files) or deserve a
     /// warning (lengths that differ, so panels will drift in phase).
+    ///
+    /// [claude] v4: checked across every work in the playlist, each problem
+    /// named by its work, since the one on screen in setup may not be the
+    /// one with the missing file.
     var problems: (blocking: [String], warnings: [String]) {
         var blocking: [String] = [], warnings: [String] = []
         if machineIndex == nil {
             let names = show.machines.map(\.name).joined(separator: ", ")
             return (["This show has parts for \(names), but not for this Mac (\(Self.thisMac))."], [])
         }
-        let active = Array(panels.prefix(displays.count).enumerated())
-        for (i, p) in active {
-            guard let f = p.file else { continue }
-            if !fileExists(f) { blocking.append("Panel \(i + 1): file not found (\(f)).") }
-            else if unreadable.contains(f) { blocking.append("Panel \(i + 1): can't read this file as video.") }
+        if show.works.isEmpty { return (["Choose a media folder and Scan, or add a work."], []) }
+        // [claude] Copying gigabytes while playing would compete with the
+        // players for the disk; a collect is short and run by a person.
+        if collecting != nil { blocking.append("Wait for the collect to finish.") }
+        for (w, work) in show.works.enumerated() {
+            let active = Array(panels(of: w).prefix(displays.count).enumerated())
+            for (i, p) in active {
+                guard let file = p.file else { continue }
+                let f = resolve(file)
+                if !fileExists(f) { blocking.append("\(work.name), display \(i + 1): file not found (\(f)).") }
+                else if unreadable.contains(f) { blocking.append("\(work.name), display \(i + 1): can't read this file as video.") }
+                else if media[f] == nil { blocking.append("\(work.name), display \(i + 1): still reading the file…") }
+            }
+            if let extra = leftOver[work.name] {
+                warnings.append("\(work.name): \(extra.count) more file(s) than displays, not used: \(extra.joined(separator: ", ")).")
+            }
+            if panels(of: w).count > displays.count, panels(of: w).dropFirst(displays.count).contains(where: { $0.file != nil }) {
+                warnings.append("\(work.name) has files for \(panels(of: w).count) displays but \(displays.count) are connected. The extra ones won't play.")
+            }
         }
-        if !active.contains(where: { $0.element.file != nil }) { blocking.append("Choose a file for at least one panel.") }
-        let lengths = active.compactMap { $0.element.file.flatMap { media[$0] } }
-        if let lo = lengths.map(\.duration).min(), let hi = lengths.map(\.duration).max(),
-           hi - lo > 1 / (lengths.map(\.fps).max() ?? 30) {
-            warnings.append(String(format: "Lengths differ (%.2f s to %.2f s). Each panel loops on its own length, so they'll drift apart in phase.", lo, hi))
+        if blocking.isEmpty, !show.works.indices.contains(where: { length(of: $0) > 0 }) {
+            blocking.append("No work has a file for this Mac's displays.")
         }
-        if panels.count > displays.count {
-            warnings.append("This show has \(panels.count) panels but \(displays.count) display(s) are connected. The extra panels won't play.")
+        // [claude] P2 plays playlists on one Mac. Across Macs the players
+        // would each time the works by their own files' lengths and drift
+        // apart at the first change; P3 sends one set of lengths to all. A
+        // show of one work that loops until stopped (a version 2 show) has
+        // no changes to time, so it plays across Macs as 0.1.3 did.
+        if mode != .standalone, !isSingleLoopingWork {
+            blocking.append("Playlists across Macs come in the next stage. In Conductor or Player mode, a show must be one work set to play until stopped, with shorter screens looping.")
         }
         return (blocking, warnings)
+    }
+
+    private var isSingleLoopingWork: Bool {
+        show.works.count == 1 && show.works[0].repeat == .untilNext && show.works[0].shorter == .loop
     }
 
     // MARK: Show files
@@ -350,10 +679,12 @@ final class AppModel: ObservableObject {
         do {
             show = try ShowFile.decode(Data(contentsOf: url))
             showPath = url
+            selectedWork = 0
+            leftOver = [:]
             UserDefaults.standard.set(url.path, forKey: lastShowKey)
             refreshDisplays()
             // Only this Mac's files: the other machines' paths are on their disks.
-            panels.compactMap(\.file).filter(fileExists).forEach(loadInfo)
+            loadAllInfo()
         } catch {
             lastError = "Couldn't open \(url.lastPathComponent): \(error)"
         }
@@ -394,8 +725,7 @@ final class AppModel: ObservableObject {
     private func startPlayback(following s: ShowState?) {
         // [claude] Say why a Play does nothing. Before this, a refused Play was
         // a silent return, which is exactly what "nothing happened" looks like.
-        NSLog("Play pressed: %d display(s), files: %@", displays.count,
-              panels.prefix(displays.count).map { $0.file.map { ($0 as NSString).lastPathComponent } ?? "-" }.joined(separator: ", "))
+        NSLog("Play pressed: %d display(s), %d work(s)", displays.count, show.works.count)
         if isPlaying { NSLog("Play refused: already playing"); return }
         let blocking = problems.blocking
         if !blocking.isEmpty {
@@ -416,26 +746,34 @@ final class AppModel: ObservableObject {
         let screens = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { s in
             Self.info(for: s).map { ($0.id, s) }
         })
-        let assignments = zip(displays, panels).compactMap { d, p in screens[d.id].map { ($0, p) } }
+        let ordered = displays.compactMap { screens[$0.id] }
+        // [claude] Each work's part on this Mac, files resolved to full paths
+        // and measured: what Playback needs to lay out and time every work.
+        let parts = show.works.indices.map { w -> WorkPart in
+            let ps = panels(of: w).prefix(ordered.count).map { p -> PanelConfig in
+                var p = p
+                p.file = p.file.map(resolve)
+                return p
+            }
+            let durations = Dictionary(ps.compactMap { p in p.file.flatMap { f in media[f].map { (f, $0.duration) } } },
+                                       uniquingKeysWith: { a, _ in a })
+            let work = show.works[w]
+            return WorkPart(name: work.name, panels: Array(ps), durations: durations, length: length(of: w),
+                            repeat: work.repeat, shorter: work.shorter)
+        }
         lastError = nil
         // The setup window is hidden only once the panel windows are up, never
         // before: hiding the last visible window quits the app (see Playback.init).
         // A leader reports each state change; on a conductor that goes to the
         // players, standalone it goes nowhere (server is nil).
         let report: ((ShowState) -> Void)? = s != nil ? nil : { [weak self] state in self?.server?.publish(state) }
-        let pb = Playback(assignments: assignments, sync: show.sync, clock: clock, onStateChange: report,
+        let pb = Playback(screens: ordered, works: parts, playlist: show.playlist, sync: show.sync, clock: clock,
+                          allowSkip: mode == .standalone, onStateChange: report,
                           onWindowsUp: { [weak self] in self?.setupWindows.forEach { $0.orderOut(nil) } },
                           onEnd: { [weak self] in self?.playbackEnded() })
         playback = pb
         isPlaying = true
-        Task {
-            do { try await pb.start(following: s?.start) }
-            catch {
-                pb.stop()
-                lastError = "Couldn't start playback: \(error)"
-                NSLog("%@", lastError ?? "")
-            }
-        }
+        pb.start(following: s?.start)
     }
 
     func stop() { playback?.stop() }
@@ -446,6 +784,7 @@ final class AppModel: ObservableObject {
     }
 
     private func playbackEnded() {
+        if let failure = playback?.failure { lastError = failure; NSLog("%@", failure) }
         playback = nil
         isPlaying = false
         setupWindows.forEach { $0.makeKeyAndOrderFront(nil) }

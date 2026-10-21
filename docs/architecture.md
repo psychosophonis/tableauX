@@ -247,9 +247,17 @@ ShowState(version:phase:start:pausedAt:).bytes / ShowState(bytes:) // Stage 3a
 StateFollower().accept(_:now:) -> Bool                          // Stage 3a: stale states ignored
 SyncMath.scheduledStart(start:now:lead:) -> Double              // Stage 3a: start or join late
 FolderScan.videos(_:) / .assign(folder:files:displays:)         // v4 P1: natural sort, overflow (T14)
+FolderScan.fill(_:folder:files:displays:) -> (panels, leftOver)     // v4: new displays take unused files; append-only
 PlaylistMerge.merge(_:with:) / .length(of:in:)                  // v4 P1: works joined by folder name (T14)
 Timeline(entries:settings:).position(at:anchor:start:)          // v4 P1: pure timeline (T15)
 Timeline.screenPosition(elapsed:workLength:fileDuration:shorter:)
+Timeline.segment(at:anchor:start:) -> Segment {position, begins, ends?} // v4 P2: edges, for one timer per change
+Timeline.next(after:) / previous(before:) / playable(from:) -> Int?     // v4 P2: skip empty works; wrap only when looping
+ItemLayout.pieces(fileDuration:workLength:repeat:shorter:cover:maxPieces:) -> [.clip | .empty(s)]  // v4 P2: never ends empty
+ShowFile.decode: version 3; version 2 → one work (§ v4 › Model)          // v4 P2
+Collect.plan(works:machine:resolve:takenFolders:) -> Plan {copies, works}  // v4: § Collecting and importing
+Collect.uniqueName(_:taken:) / .folderName(_:)                          // case-insensitive clash → "name 2.ext"
+FolderImport.works(root:rootFiles:subfolders:machine:displays:existing:) -> Result {works, skipped, leftOver}
 ```
 
 ### Show state (Stage 3a) [claude, 2026-10-21; Mat asked for 3a, details to confirm]
@@ -388,6 +396,43 @@ release 0.3 (Mat: "move to three"). Builds on v3. -->
   screen is chosen from the files that player reported, without visiting it.
 - Works can be reordered and skipped; a rescan adds new folders without
   disturbing works already set up.
+- **New displays take the left-over files (Mat, 2026-10-21):** when a Mac
+  has more displays than a work has screens set (a display plugged in, or
+  a show opened on a Mac with more), the new displays take the unused
+  videos of that work's folder, in name order. [claude] Screens already
+  set, black ones included, are untouched; displays still without a file
+  stay unset, so a file added later fills them at the next scan. A work
+  whose files on this Mac come from several folders was set by hand and is
+  left alone.
+
+### Collecting and importing (Mat, 2026-10-21)
+- **Files stay where they are (Mat):** in the media folder, or linked by
+  full path. Nothing is copied unless a person asks to collect.
+- **Import a folder (Mat: link in place):** a folder chosen from anywhere
+  adds works without copying; panels hold full paths to the files where
+  they are. [claude] The folder's own videos are one work named after it;
+  each subfolder with videos is another, in name order; screens assigned by
+  the folder-scan rule. A name the playlist already has is skipped and
+  reported, as a rescan never disturbs a work.
+- **Collect, per show and per work, for archiving (Mat):** copies the files
+  into one folder; the originals are untouched. **Each Mac collects its own
+  files (Mat)**, so nothing is copied between Macs; for a show across
+  Macs, collect on each and put the folders together.
+- [claude] **An archive has the layout of a media folder:** one subfolder
+  per work, named after it, holding that Mac's files for it. Collect show
+  adds `<show>.tableaux` with this Mac's paths rewritten relative to the
+  archive (other Macs' paths unchanged); it plays with the media folder
+  pointed at the archive. Collect work makes just the work's folder, which
+  Import reads back as the work.
+- [claude] Details: a file on two screens of one work is copied once; a
+  name clash (ignoring case, as a Mac's disk does) becomes "name 2.ext"; a
+  work name with "/" or ":" gets "-" in its folder name, and a folder
+  already at the destination gets " 2". Missing files are skipped and
+  listed; free space is checked before copying; Play is blocked while a
+  collect runs.
+- [claude] **Limit:** a collected work keeps its file names, so importing
+  it assigns screens in name order. An order set by hand, or a black screen
+  between files, survives only through the collected show file.
 
 ### Playing (Mat: auto-advance with manual override; black gap)
 - Each work has a **repeat**: once, N times, or until moved on (a single
@@ -452,6 +497,28 @@ Panel { file: string | null, audio: bool, scaling }   // file relative to that M
 ```
 A version 2 show opens as a one-work playlist.
 
+<!-- [claude] 2026-10-21, P2. Details the spec left open, decided in code;
+for Mat to confirm or change. -->
+- **[claude] Departure, flagged:** a panel's file may also be an ABSOLUTE
+  path (starting with `/`). A version 2 show holds absolute paths, and a
+  file chosen by hand from outside the media folder needs one. Files chosen
+  inside the media folder are stored relative.
+- **[claude] Version 2 conversion:** one work named "Show", repeat
+  `untilNext`, shorter `loop`: exactly how v1–v3 played (until stopped, each
+  panel looping on its own length). Machines get `displays` = their panel
+  count.
+- **[claude] One item per screen per work:** each screen's player item is
+  laid out so its time is the time into the work (`ItemLayout`): `loop` =
+  the file end to end; `black` = the file, then empty time up to the work's
+  length, per play. An empty range at the END of an item is dropped by
+  AVFoundation (`proofs/empty-range-probe.swift`), so items end on a clip and
+  the app hides a screen whose item ends before its work.
+- **[claude] → / ←:** black at once, the chosen work after the gap. In a gap,
+  "current" is the work about to start.
+- **[claude] P2 limit:** until P3 sends one set of lengths to every Mac,
+  Conductor and Player modes play only a show of one work that loops until
+  stopped (a version 2 show), and → / ← are off there.
+
 ### Targets
 | # | Target | How it is checked |
 |---|--------|-------------------|
@@ -481,6 +548,7 @@ DriftGate(grace:).check(out: Bool, now: Double) -> Bool                 // true 
 ShowFile.decode(Data) throws -> Show ; ShowFile.encode(Show) -> Data
 Show.machineIndex(named: String) -> Int?                                // § Show file › which machine
 ```
+(Playlist API, v4: see the API list under § v3 › Clock, with the other later stages.)
 
 ## Verification
 
@@ -490,7 +558,8 @@ swift build && swift test
 
 Tests: `DisplayOrderTests`, `PlacementTests`, `SyncMathTests`, `ShowFileTests`,
 `NetworkClockTests`, `ClockReplayTests` (the real Wi-Fi recording),
-`FolderScanTests`, `PlaylistMergeTests`, `TimelineTests` (v4).
+`FolderScanTests`, `PlaylistMergeTests`, `TimelineTests`, `ItemLayoutTests`,
+`CollectTests`, `FolderImportTests` (v4).
 Probes: also `proofs/clock-probe.swift` (T10, T11), `proofs/work-switch-probe.swift` (v4 riskiest assumption).
 Probes: `proofs/sync-probe.swift` (T1, T2, T4 on this machine).
 Lab checklist (T4 on the Mac mini, T6): `docs/LAB-TEST.md`.

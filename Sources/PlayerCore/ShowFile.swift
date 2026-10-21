@@ -2,7 +2,10 @@ import Foundation
 
 /// One panel's settings. Panel n plays on display n (see DisplayOrder).
 public struct PanelConfig: Codable, Equatable {
-    public var file: String?          // absolute path; nil = this display stays black
+    /// [claude] v4: relative to this Mac's media folder ("Smith/1.mp4"), or an
+    /// absolute path ("/…") for a v2 show or a file chosen from elsewhere.
+    /// nil = this display stays black.
+    public var file: String?
     public var audio: Bool
     public var scaling: Scaling
 
@@ -11,8 +14,9 @@ public struct PanelConfig: Codable, Equatable {
     }
 }
 
-/// [claude] One Mac's part of a show: its displays' panels, numbered on that
-/// Mac left to right (docs/architecture.md § Show file, v3 § Show and media).
+/// [claude] One Mac in a show (docs/architecture.md § v4 › Model). Its panels
+/// are per work now (`Work.screens[name]`); the machine itself only says who
+/// it is and how many displays it has, which numbers the screens across Macs.
 ///
 /// The name is the Mac's computer name, the one a person sees and can change
 /// in System Settings. It is an IDENTIFIER CHOSEN FOR PEOPLE, not machines: a
@@ -21,10 +25,10 @@ public struct PanelConfig: Codable, Equatable {
 /// is that two Macs with the same name would claim the same part.
 public struct Machine: Codable, Equatable {
     public var name: String
-    public var panels: [PanelConfig]
+    public var displays: Int
 
-    public init(name: String, panels: [PanelConfig] = []) {
-        self.name = name; self.panels = panels
+    public init(name: String, displays: Int = 0) {
+        self.name = name; self.displays = displays
     }
 }
 
@@ -48,16 +52,21 @@ public struct SyncSettings: Codable, Equatable {
     }
 }
 
-/// A saved arrangement: which file goes on which display of which Mac, and how.
+/// A saved arrangement: the Macs, and a playlist of works, each saying which
+/// file goes on which display of which Mac, and how.
 public struct Show: Codable, Equatable {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
     public var version: Int
     public var machines: [Machine]
+    public var works: [Work]                  // [claude] v4: playlist order
+    public var playlist: PlaylistSettings
     public var sync: SyncSettings
     public var playOnLaunch: Bool
 
-    public init(machines: [Machine], sync: SyncSettings = .standard, playOnLaunch: Bool = false) {
+    public init(machines: [Machine], works: [Work] = [], playlist: PlaylistSettings = .standard,
+                sync: SyncSettings = .standard, playOnLaunch: Bool = false) {
         self.version = Show.currentVersion; self.machines = machines
+        self.works = works; self.playlist = playlist
         self.sync = sync; self.playOnLaunch = playOnLaunch
     }
 
@@ -78,6 +87,29 @@ public enum ShowFileError: Error, Equatable {
     case unsupportedVersion(Int)
     case noMachines
     case invalidSync(SyncSettings)
+    case invalidGap(Double)
+}
+
+/// [claude] A version 2 show, kept only to be read and converted.
+///
+/// This is the usual way to MIGRATE a file format: decode the old shape into
+/// its own type, exactly as it was written, then convert that to the current
+/// model in one function. The current model never has to carry old fields,
+/// and each conversion can be tested on its own.
+private struct ShowV2: Decodable {
+    struct MachineV2: Decodable { let name: String; let panels: [PanelConfig] }
+    let machines: [MachineV2]
+    let sync: SyncSettings
+    let playOnLaunch: Bool
+
+    /// One work that plays the way every show did before playlists: until
+    /// stopped, each panel looping on its own length.
+    var converted: Show {
+        let work = Work(name: "Show", screens: Dictionary(machines.map { ($0.name, $0.panels) }, uniquingKeysWith: { a, _ in a }),
+                        repeat: .untilNext, shorter: .loop)
+        return Show(machines: machines.map { Machine(name: $0.name, displays: $0.panels.count) },
+                    works: [work], sync: sync, playOnLaunch: playOnLaunch)
+    }
 }
 
 /// Reading and writing show files (`.tableaux`, formerly `.msshow`; JSON).
@@ -92,6 +124,9 @@ public enum ShowFileError: Error, Equatable {
 /// [claude] Version 2 (machines, sync) replaced version 1 without a converter:
 /// no real shows existed yet (Mat, 2026-10-21). A version 1 file is refused
 /// like any other unknown version, which is the rule doing its job.
+/// Version 3 (playlists, § v4) does convert version 2, because § v4 › Model
+/// says a version 2 show opens as one work: shows saved with 0.1.x builds
+/// (the lab run, the two-MacBook run) keep working.
 public enum ShowFile {
     public static func decode(_ data: Data) throws -> Show {
         // Check the version BEFORE decoding the rest: a file of another version
@@ -99,13 +134,18 @@ public enum ShowFile {
         // would hide the real reason it can't be read.
         struct Header: Decodable { let version: Int }
         let version = try JSONDecoder().decode(Header.self, from: data).version
-        guard version == Show.currentVersion else { throw ShowFileError.unsupportedVersion(version) }
-        let show = try JSONDecoder().decode(Show.self, from: data)
+        let show: Show
+        switch version {
+        case Show.currentVersion: show = try JSONDecoder().decode(Show.self, from: data)
+        case 2: show = try JSONDecoder().decode(ShowV2.self, from: data).converted
+        default: throw ShowFileError.unsupportedVersion(version)
+        }
         // VALIDATE AT THE BOUNDARY: everything past this point may assume a
-        // show has a machine and sane sync numbers, so nothing downstream needs
-        // to re-check a hand-edited file.
+        // show has a machine and sane numbers, so nothing downstream needs to
+        // re-check a hand-edited file.
         guard !show.machines.isEmpty else { throw ShowFileError.noMachines }
         guard show.sync.tolerance >= 1, show.sync.grace >= 0 else { throw ShowFileError.invalidSync(show.sync) }
+        guard show.playlist.gap >= 0 else { throw ShowFileError.invalidGap(show.playlist.gap) }
         return show
     }
 

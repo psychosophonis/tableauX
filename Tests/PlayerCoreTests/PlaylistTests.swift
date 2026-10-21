@@ -27,6 +27,44 @@ final class FolderScanTests: XCTestCase {
     }
 }
 
+/// [claude] A display added after the scan takes the left-over files.
+final class FillTests: XCTestCase {
+    private let files = ["3.mp4", "1.mp4", "10.mp4", "2.mp4", "notes.txt"]
+
+    func testNewDisplaysTakeTheUnusedFilesInOrder() {
+        let (scanned, _) = FolderScan.assign(folder: "W", files: files, displays: 2)
+        let (panels, left) = FolderScan.fill(scanned, folder: "W", files: files, displays: 3)
+        XCTAssertEqual(panels.map(\.file), ["W/1.mp4", "W/2.mp4", "W/3.mp4"])
+        XCTAssertEqual(left, ["10.mp4"])
+    }
+
+    func testPanelsAlreadySetAreKeptEvenBlackOrByHand() {
+        let set = [PanelConfig(file: "W/3.mp4", audio: true), PanelConfig()]
+        let (panels, left) = FolderScan.fill(set, folder: "W", files: files, displays: 4)
+        XCTAssertEqual(panels.map(\.file), ["W/3.mp4", nil, "W/1.mp4", "W/2.mp4"])
+        XCTAssertTrue(panels[0].audio)
+        XCTAssertEqual(left, ["10.mp4"])
+    }
+
+    /// Out of files: the rest stay unset (black), so a file added later
+    /// still fills them; they are not stored as black.
+    func testRunningOutOfFilesLeavesTheRestUnset() {
+        let one = [PanelConfig(file: "/x/W/1.mp4")]
+        let (panels, left) = FolderScan.fill(one, folder: "/x/W", files: ["1.mp4"], displays: 3)
+        XCTAssertEqual(panels, one)
+        XCTAssertEqual(left, [])
+        let (later, _) = FolderScan.fill(panels, folder: "/x/W", files: ["1.mp4", "2.mp4"], displays: 3)
+        XCTAssertEqual(later.map(\.file), ["/x/W/1.mp4", "/x/W/2.mp4"])
+    }
+
+    func testNoChangeWhenThePanelsCoverTheDisplays() {
+        let set = [PanelConfig(file: "W/1.mp4"), PanelConfig()]
+        let (panels, left) = FolderScan.fill(set, folder: "W", files: files, displays: 2)
+        XCTAssertEqual(panels, set)
+        XCTAssertEqual(left, ["2.mp4", "3.mp4", "10.mp4"])
+    }
+}
+
 final class PlaylistMergeTests: XCTestCase {
     private func inv(_ machine: String, _ displays: Int, _ folders: [String: [(String, Double)]]) -> Inventory {
         Inventory(machine: machine, displays: displays,
@@ -145,11 +183,105 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(Timeline(entries: [.init(length: 0, repeat: .once)], settings: .standard).position(at: 5, anchor: 0, start: 0), .ended)
     }
 
+    /// [claude] The edges playback sets its one timer from.
+    func testSegmentsGiveTheirEdgesInShowTime() {
+        XCTAssertEqual(t.segment(at: 1010, anchor: 0, start: 1000),
+                       .init(position: .work(index: 0, elapsed: 10), begins: 1000, ends: 1060))
+        XCTAssertEqual(t.segment(at: 1061, anchor: 0, start: 1000),
+                       .init(position: .gap(next: 1), begins: 1060, ends: 1063))
+        // Work 1 plays twice: one stretch of 60 s, not two of 30.
+        XCTAssertEqual(t.segment(at: 1100, anchor: 0, start: 1000),
+                       .init(position: .work(index: 1, elapsed: 37), begins: 1063, ends: 1123))
+        XCTAssertEqual(t.segment(at: 990, anchor: 0, start: 1000),
+                       .init(position: .waiting, begins: -.infinity, ends: 1000))
+    }
+
+    /// The far-future shortcut must give the right edges too, not just the
+    /// right position: 1000 cycles on, work 1 began at 70 − 7 into the cycle.
+    func testFarFutureSegmentEdges() {
+        let s = t.segment(at: 1000 + 174 * 1000 + 70, anchor: 0, start: 1000)
+        XCTAssertEqual(s.begins, 1000 + 174 * 1000 + 63)
+        XCTAssertEqual(s.ends, 1000 + 174 * 1000 + 123)
+    }
+
+    func testUntilNextAndTheEndHaveNoEnd() {
+        let held = Timeline(entries: [.init(length: 20, repeat: .untilNext)], settings: .standard)
+        XCTAssertNil(held.segment(at: 500, anchor: 0, start: 0).ends)
+        let once = Timeline(entries: [.init(length: 10, repeat: .once)], settings: PlaylistSettings(gap: 3, loop: false))
+        XCTAssertEqual(once.segment(at: 11, anchor: 0, start: 0), .init(position: .ended, begins: 10, ends: nil))
+    }
+
+    func testNextAndPreviousSkipEmptyWorksAndWrapOnlyWhenLooping() {
+        let es: [Timeline.Entry] = [.init(length: 10, repeat: .once), .init(length: 0, repeat: .once), .init(length: 10, repeat: .once)]
+        let looping = Timeline(entries: es, settings: PlaylistSettings(gap: 3, loop: true))
+        XCTAssertEqual(looping.next(after: 0), 2)
+        XCTAssertEqual(looping.previous(before: 2), 0)
+        XCTAssertEqual(looping.previous(before: 0), 2)
+        XCTAssertEqual(looping.playable(from: 1), 2)
+        let once = Timeline(entries: es, settings: PlaylistSettings(gap: 3, loop: false))
+        XCTAssertNil(once.previous(before: 0))
+        XCTAssertNil(once.next(after: 2))
+    }
+
     func testShorterScreensGoBlackOrLoop() {
         // A 20 s file in a 60 s work, played twice.
         XCTAssertEqual(Timeline.screenPosition(elapsed: 10, workLength: 60, fileDuration: 20, shorter: .black), 10)
         XCTAssertNil(Timeline.screenPosition(elapsed: 25, workLength: 60, fileDuration: 20, shorter: .black))
         XCTAssertEqual(Timeline.screenPosition(elapsed: 65, workLength: 60, fileDuration: 20, shorter: .black), 5)    // second play restarts it
         XCTAssertEqual(Timeline.screenPosition(elapsed: 25, workLength: 60, fileDuration: 20, shorter: .loop), 5)
+    }
+}
+
+/// [claude] One screen's item per work: its time must equal time into the
+/// work, the property `Timeline.screenPosition` states.
+final class ItemLayoutTests: XCTestCase {
+    private func pieces(_ d: Double, _ l: Double, _ r: Repeat, _ s: Shorter) -> [ItemLayout.Piece] {
+        ItemLayout.pieces(fileDuration: d, workLength: l, repeat: r, shorter: s, cover: 86_400, maxPieces: 2_000)
+    }
+
+    func testBlackPutsEmptyTimeBetweenPlaysButNeverAtTheEnd() {
+        XCTAssertEqual(pieces(20, 60, .times(2), .black), [.clip, .empty(40), .clip])
+        XCTAssertEqual(pieces(20, 60, .once, .black), [.clip])
+    }
+
+    func testLoopRepeatsTheFileToCoverTheWork() {
+        XCTAssertEqual(pieces(20, 60, .once, .loop), Array(repeating: .clip, count: 3))
+        XCTAssertEqual(pieces(25, 60, .once, .loop).count, 3)         // 75 s ≥ 60: the end is cut by the work ending
+    }
+
+    func testTheLongestFileIsBackToBackEitherWay() {
+        XCTAssertEqual(pieces(60, 60, .times(3), .black), [.clip, .clip, .clip])
+    }
+
+    /// The property itself: wherever the work is, the item laid out for it
+    /// shows what `screenPosition` says (a clip at that offset, or nothing).
+    func testItemTimeIsTimeIntoTheWork() {
+        let d = 20.0, l = 60.0
+        let layout = pieces(d, l, .times(3), .black)
+        for elapsed in stride(from: 0.5, to: 180, by: 1.0) {
+            var start = 0.0, found: Double?
+            for p in layout {
+                switch p {
+                case .clip:
+                    if elapsed >= start && elapsed < start + d { found = elapsed - start }
+                    start += d
+                case .empty(let s): start += s
+                }
+            }
+            XCTAssertEqual(found, Timeline.screenPosition(elapsed: elapsed, workLength: l, fileDuration: d, shorter: .black), "at \(elapsed)")
+        }
+    }
+
+    func testUntilNextCoversADayAndIsCapped() {
+        let held = ItemLayout.pieces(fileDuration: 10, workLength: 10, repeat: .untilNext, shorter: .loop, cover: 3600, maxPieces: 2_000)
+        XCTAssertEqual(held.count, 360)
+        let capped = ItemLayout.pieces(fileDuration: 1, workLength: 30, repeat: .untilNext, shorter: .black, cover: 86_400, maxPieces: 2_000)
+        XCTAssertLessThanOrEqual(capped.count, 2_000)
+        XCTAssertEqual(capped.last, .clip)
+        XCTAssertEqual(ItemLayout.duration([.clip, .empty(40), .clip], fileDuration: 20), 80)
+    }
+
+    func testNoFileNoItem() {
+        XCTAssertEqual(pieces(0, 60, .once, .black), [])
     }
 }

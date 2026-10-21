@@ -15,25 +15,54 @@ final class PanelWindow: NSWindow {
     override func keyDown(with event: NSEvent) { onKey?(event) }
 }
 
-/// One panel during playback.
+/// [claude] One work's part on this Mac, ready to play (§ v4 › Model): its
+/// panels with files resolved to full paths, and its timing.
+struct WorkPart {
+    let name: String
+    let panels: [PanelConfig]       // index = this Mac's display - 1; files absolute
+    let durations: [String: Double] // file → its length, for the item layout
+    let length: Double              // one play: the work's longest file (0 = nothing here)
+    let `repeat`: Repeat
+    let shorter: Shorter
+}
+
+/// One panel during one work.
 @MainActor
 private final class LivePanel {
     let window: PanelWindow
     let player: AVPlayer?           // nil = this display just stays black
-    let itemDuration: Double        // the whole repeated item, not one clip
+    let layer: AVPlayerLayer?
+    let itemDuration: Double        // the whole laid-out item (ItemLayout)
+    let wraps: Bool                 // [claude] an "until next" item repeats when it runs out, as v1's did
     let frame: Double               // one frame, in seconds
     var corrections = 0
     var gate: DriftGate             // [claude] the grace period, per panel (§ Sync)
+    var finished = false            // [claude] its item ended before the work did: black until the work ends
 
-    init(window: PanelWindow, player: AVPlayer?, itemDuration: Double, frame: Double, grace: Double) {
-        self.window = window; self.player = player; self.itemDuration = itemDuration; self.frame = frame
+    init(window: PanelWindow, player: AVPlayer?, layer: AVPlayerLayer?, itemDuration: Double, wraps: Bool, frame: Double, grace: Double) {
+        self.window = window; self.player = player; self.layer = layer
+        self.itemDuration = itemDuration; self.wraps = wraps; self.frame = frame
         self.gate = DriftGate(grace: grace)
+    }
+}
+
+/// [claude] The players of the work on screen (or loading for the next).
+@MainActor
+private final class LoadedWork {
+    let index: Int
+    var begins: Double              // show time this play of the work starts
+    let panels: [LivePanel]
+    var scheduled = false           // its players have been told when to start
+    var endObservers: [NSObjectProtocol] = []
+
+    init(index: Int, begins: Double, panels: [LivePanel]) {
+        self.index = index; self.begins = begins; self.panels = panels
     }
 }
 
 /// [claude] The show's clock, as seen from this Mac (§ v3 › Show state).
 ///
-/// Playback keeps every time (the start h0, a pause, the drift check's
+/// Playback keeps every time (a work's start, a pause, the drift check's
 /// "where should it be") in SHOW TIME, and converts to this Mac's host clock
 /// only at the last step, when it tells an AVPlayer when to start. This is an
 /// ADAPTER: the same playback code runs standalone, as a conductor (show time
@@ -50,51 +79,77 @@ struct ShowClock {
     }
 }
 
-/// Runs one show: a window per display, a player per panel, one shared clock.
+/// Runs one show: a window per display for the whole show, and per work a
+/// player per panel, all on one shared clock.
 ///
 /// The sync design, which `proofs/sync-probe.swift` tested before this was
 /// built (docs/architecture.md § Sync):
 ///  1. Every player follows the HOST CLOCK (masterClock), so all of them count
 ///     time from the same source and can't drift relative to each other.
-///  2. All players get the same start instant `h0`, a moment slightly in the
+///  2. All players get the same start instant, a moment slightly in the
 ///     future, through setRate(_:time:atHostTime:). Scheduling ahead absorbs
 ///     the time it takes to tell each player in turn, so they all start together.
-///  3. Each item is the clip repeated end to end, so looping is a continuous
-///     stream with no seek at the loop point.
+///  3. Each item is laid out so its own time is time into the work
+///     (ItemLayout): looping is clips end to end, with no seek at the loop
+///     point; "black" is empty time between plays.
 ///  4. Once a second a CLOSED-LOOP CHECK compares each panel with where the
 ///     shared clock says it should be, and re-syncs any panel that has been
 ///     more than the show's tolerance out for its grace period (default 3
-///     frames, 5 s; a stalled panel at once). Steps 1–3 should make this rare;
-///     the check catches what they don't, such as a stall or a capped item
-///     running out.
+///     frames, 5 s; a stalled panel at once).
+///
+/// [claude] v4 playlists (§ v4 › Playing, Timing): which work is on is a pure
+/// function of the show time (`Timeline.segment`), given an ANCHOR ("work k
+/// started at show time t0"). Playback asks the timeline what is on now and
+/// when that ends, and sets one timer for the end. At each end it tears the
+/// work's players down (black), builds the next work's during the gap, and
+/// starts them at the work's start. Only a person (→, ←) moves the anchor.
+/// The windows stay up throughout, so the screens never flash the desktop
+/// and some window is always visible (see init).
 @MainActor
 final class Playback {
-    /// Each item covers this much time before it needs a resync (docs/architecture.md).
+    /// An "until next" item covers this much time before it needs a resync (docs/architecture.md).
     static let cover: Double = 24 * 3600
     static let maxSegments = 2_000
 
-    private let assignments: [(NSScreen, PanelConfig)]
+    private let screens: [NSScreen]
+    private let works: [WorkPart]
+    private let timeline: Timeline
     private let sync: SyncSettings
     private let clock: ShowClock
     /// Set on a conductor or standalone Mac, which decides the show's state and
     /// reports each change here. Nil on a player, which follows (see `follow`).
     private let onStateChange: ((ShowState) -> Void)?
     private var leads: Bool { onStateChange != nil }
+    /// [claude] → and ← (P2: one Mac only; across Macs they need P3's state
+    /// with a work index, so AppModel turns them off in network modes).
+    private let allowSkip: Bool
     private let onWindowsUp: () -> Void
     private let onEnd: () -> Void
-    private var panels: [LivePanel] = []
     // [claude] Every window this show has opened, tracked from the moment it is
-    // built. `panels` only gains a window once its video has loaded, so a stop
-    // during loading (Esc, a failed file, a display change) used to leave the
-    // rest of the black windows covering the screens.
+    // built. A stop during loading (Esc, a failed file, a display change)
+    // used to leave black windows covering the screens.
     private var windows: [PanelWindow] = []
     private let hostClock = CMClockGetHostTimeClock()
-    private var h0 = 0.0                 // shared start, show time (seconds)
+    /// [claude] The timeline's anchor: work `index` starts at show time `start`.
+    /// `start` is what ShowState carries as the show's start (v1's h0).
+    private var anchor = (index: 0, start: 0.0)
     private var pausedAt: Double?        // show time we paused at, if paused
-    private var timer: Timer?
+    private var loaded: LoadedWork?      // the work on screen, or the next one, loaded
+    /// [claude] What is being loaded, and a GENERATION number: each new load
+    /// takes the next number, and a load that finishes to find the number
+    /// moved on (Next was pressed meanwhile) throws its players away instead
+    /// of putting a stale work on screen. A cheap way to cancel async work
+    /// that can't be interrupted part way.
+    private var loading: (index: Int, begins: Double?)?
+    private var generation = 0
+    private var segmentTimer: Timer?     // fires when the current stretch ends
+    private var revealTimer: Timer?      // fires when a loaded work starts
+    private var driftTimer: Timer?
     private var sleepAssertion: IOPMAssertionID = 0
     private var stopped = false
-    private var started = false          // true once the shared start is scheduled
+    private var started = false          // true once the first work's start is set
+    /// Why the show stopped, if something went wrong; AppModel shows it.
+    private(set) var failure: String?
 
     /// `onWindowsUp` runs once every panel window is on screen; `onEnd` runs
     /// when the show stops, before its windows close.
@@ -105,15 +160,21 @@ final class Playback {
     /// version hid the setup window before the panel windows existed, and the
     /// app quit the moment Play was pressed (confirmed with a diagnostic log on
     /// 2026-10-21). So the hand-over goes: new windows up, then old ones away.
-    init(assignments: [(NSScreen, PanelConfig)],
+    init(screens: [NSScreen],
+         works: [WorkPart],
+         playlist: PlaylistSettings,
          sync: SyncSettings,
          clock: ShowClock = .local,
+         allowSkip: Bool,
          onStateChange: ((ShowState) -> Void)?,
          onWindowsUp: @escaping () -> Void,
          onEnd: @escaping () -> Void) {
-        self.assignments = assignments
+        self.screens = screens
+        self.works = works
+        self.timeline = Timeline(entries: works.map { .init(length: $0.length, repeat: $0.repeat) }, settings: playlist)
         self.sync = sync
         self.clock = clock
+        self.allowSkip = allowSkip
         self.onStateChange = onStateChange
         self.onWindowsUp = onWindowsUp
         self.onEnd = onEnd
@@ -123,118 +184,189 @@ final class Playback {
     private func cm(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: 1_000_000_000) }
     private func showNow() -> Double? { clock.toShow(hostNow()) }
 
-    /// Starts every panel together at show time `at`, each at the position the
-    /// show has reached then (frame 0 if `at` is the start itself).
-    private func schedule(at: Double) {
-        guard let host = clock.toHost(at) else { return }
-        for p in panels { p.player?.setRate(1, time: cm(expected(p, atShow: at)), atHostTime: cm(host)) }
-    }
+    // [claude] STAGE LOGGING: one line per step, so a start or a change of
+    // work that never happens says where it stopped (and how long each step
+    // took), instead of leaving black screens and no clue.
+    private func log(_ s: String) { NSLog("playlist: %@", s) }
 
     private func report(_ phase: ShowState.Phase) {
-        onStateChange?(ShowState(version: hostNanos(), phase: phase, start: h0, pausedAt: pausedAt ?? 0))
+        onStateChange?(ShowState(version: hostNanos(), phase: phase, start: anchor.start, pausedAt: pausedAt ?? 0))
     }
 
-    /// Starts the show. A leader (conductor, standalone) picks the start, 1 s
-    /// after its own panels are ready; a player passes the conductor's
-    /// `start` and joins it (`SyncMath.scheduledStart`).
-    func start(following start: Double? = nil) async throws {
-        if let start { h0 = start }
-        // [claude] STAGE LOGGING: one line per step of the start sequence, each
-        // stamped with the time since Play. A start that never happens then
-        // says where it stopped (and how long each step took), instead of
-        // leaving black screens and no clue. Added after a real start failed
-        // silently on 2026-10-21.
-        let t0 = Date()
-        func stage(_ s: String) { NSLog("start +%.2fs: %@", Date().timeIntervalSince(t0), s) }
-
+    /// Starts the show. A leader (conductor, standalone) loads the first
+    /// work and starts it 1 s after its panels are ready; a player passes the
+    /// conductor's `start` and joins the timeline from it.
+    func start(following start: Double? = nil) {
         // Build windows first, so every display goes black at once even while
         // the videos are still loading.
-        var built: [(PanelWindow, PanelConfig)] = []
-        for (screen, config) in assignments {
-            let w = makeWindow(on: screen)
-            windows.append(w)
-            built.append((w, config))
-        }
-        stage("\(built.count) window(s) up")
+        for screen in screens { windows.append(makeWindow(on: screen)) }
+        log("\(windows.count) window(s) up")
         onWindowsUp()
         NSCursor.hide()
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
                                     IOPMAssertionLevel(kIOPMAssertionLevelOn),
                                     "tableauX is playing" as CFString, &sleepAssertion)
-
-        for (window, config) in built {
-            guard let path = config.file else {
-                panels.append(LivePanel(window: window, player: nil, itemDuration: 0, frame: 1.0 / 30, grace: sync.grace))
-                continue
-            }
-            let (item, itemDuration, fps) = try await Self.makeItem(URL(fileURLWithPath: path))
-            stage(String(format: "item built: %@ (%.0f fps, item %.0f s)",
-                         (path as NSString).lastPathComponent, fps, itemDuration))
-            if stopped { stage("stopped before the start finished"); return }
-            let player = AVPlayer(playerItem: item)
-            // Needed for setRate(_:time:atHostTime:), which won't schedule a start
-            // on a player that's allowed to wait for buffering.
-            player.automaticallyWaitsToMinimizeStalling = false
-            player.masterClock = hostClock
-            player.isMuted = !config.audio
-            // At the very end of a (capped) item, hold still rather than advance;
-            // the drift check sees the stopped panel and restarts it in sync.
-            player.actionAtItemEnd = .pause
-            attach(player, to: window, scaling: config.scaling)
-            panels.append(LivePanel(window: window, player: player, itemDuration: itemDuration,
-                                    frame: 1 / max(fps, 1), grace: sync.grace))
-        }
-
-        // Wait for every item to be ready, then PREROLL: decode the first frames
-        // ahead so the start is only a clock being released, not a cold decode.
-        let players = panels.compactMap(\.player)
-        while let pending = players.first(where: { $0.currentItem?.status != .readyToPlay }) {
-            if pending.currentItem?.status == .failed { throw pending.currentItem?.error ?? CocoaError(.fileReadCorruptFile) }
-            try await Task.sleep(for: .milliseconds(20))
-            if stopped { stage("stopped before the start finished"); return }
-        }
-        stage("all \(players.count) item(s) ready to play")
-        for (i, p) in players.enumerated() {
-            let ok = await p.preroll(atRate: 1)
-            stage("preroll \(i + 1): \(ok ? "done" : "interrupted")")
-        }
-        if stopped { stage("stopped before the start finished"); return }
-
-        guard let now = showNow() else { throw CocoaError(.featureUnsupported) }   // no clock estimate yet
-        if leads {
-            h0 = now + 1
-            schedule(at: h0)
-            report(.playing)
-            stage("start scheduled 1 s ahead")
-        } else if pausedAt != nil {
-            // The conductor paused while this player was loading: wait for its resume.
-            stage("ready; conductor is paused")
-        } else {
-            // `follow` may have updated h0 while the files loaded: use the latest.
-            let at = SyncMath.scheduledStart(start: h0, now: now)
-            schedule(at: at)
-            stage(at == h0 ? "start scheduled on the conductor's start"
-                           : String(format: "joining %.2f s into the show", at - h0))
-        }
-        started = true
-
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        driftTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkDrift() }
+        }
+        if let start {
+            anchor = (0, start)
+            started = true
+            advance()
+        } else {
+            guard let first = timeline.playable(from: 0) else { log("nothing to play"); stop(); return }
+            beginLoad(first, begins: nil)       // nil: "1 s after it's ready"
         }
     }
 
-    /// The clip repeated end to end in one composition, so the loop point is
-    /// just the next segment in a continuous timeline (see SyncMath.repeats).
-    private static func makeItem(_ url: URL) async throws -> (AVPlayerItem, Double, Double) {
+    // MARK: The timeline [claude]
+
+    /// Puts on screen whatever the timeline says is on now, and sets the
+    /// timer for when that changes. Called at the start, at every change,
+    /// after a skip and after a resume. Safe to call again at any moment:
+    /// if what's loaded is already right, it only re-arms the timer.
+    private func advance() {
+        segmentTimer?.invalidate()
+        guard !stopped, started, pausedAt == nil, let now = showNow() else { return }
+        let seg = timeline.segment(at: now, anchor: anchor.index, start: anchor.start)
+        let target: (index: Int, begins: Double)
+        switch seg.position {
+        case .work(let i, _): target = (i, seg.begins)
+        case .gap(let n): target = (n, seg.ends!)
+        case .waiting:
+            guard let k = timeline.playable(from: anchor.index) else { stop(); return }
+            target = (k, seg.ends!)
+        case .ended:
+            log("playlist ended")
+            stop()
+            return
+        }
+        if let loaded, loaded.index == target.index, abs(loaded.begins - target.begins) < 1e-6 {
+            if !loaded.scheduled { startLoaded() }
+        } else if let loading, loading.index == target.index, loading.begins.map({ abs($0 - target.begins) < 1e-6 }) == true {
+            // Already on its way.
+        } else {
+            unload()
+            if case .work = seg.position { log("joining \(works[target.index].name) \(String(format: "%.2f", now - target.begins)) s in") }
+            beginLoad(target.index, begins: target.begins)
+        }
+        if let ends = seg.ends { segmentTimer = timer(atShow: ends) { [weak self] in self?.advance() } }
+    }
+
+    /// A one-shot timer for a moment in show time. The host time is worked
+    /// out now; a player's estimate moves by microseconds a second, far
+    /// less than a timer's own jitter.
+    private func timer(atShow t: Double, _ f: @escaping @MainActor () -> Void) -> Timer? {
+        guard let host = clock.toHost(t) else { return nil }
+        let t = Timer(timeInterval: max(0, host - hostNow()), repeats: false) { _ in MainActor.assumeIsolated { f() } }
+        t.tolerance = 0
+        RunLoop.main.add(t, forMode: .common)
+        return t
+    }
+
+    /// Builds the players for work `index`, hidden, and prerolls them.
+    /// `begins` nil (a leader's first work): start 1 s after they're ready.
+    private func beginLoad(_ index: Int, begins: Double?) {
+        generation += 1
+        let g = generation
+        loading = (index, begins)
+        let work = works[index]
+        let t0 = Date()
+        log("loading \(work.name)")
+        Task {
+            do {
+                let panels = try await build(work)
+                guard g == generation, !stopped else { teardown(panels); return }
+                loading = nil
+                guard let now = showNow() else { teardown(panels); return }
+                let w = LoadedWork(index: index, begins: begins ?? now + 1, panels: panels)
+                observeEnds(w)
+                loaded = w
+                log(String(format: "%@ ready in %.2f s", work.name, Date().timeIntervalSince(t0)))
+                if begins == nil {
+                    anchor = (index, w.begins)
+                    started = true
+                    report(.playing)
+                }
+                if pausedAt == nil { startLoaded() }
+                if begins == nil { advance() }
+            } catch {
+                guard g == generation else { return }
+                loading = nil
+                log("couldn't load \(work.name): \(error)")
+                // One broken work shouldn't stop a class's playlist; its
+                // time passes in black and the next one plays. But with
+                // nothing started yet there's no timeline to pass: say so.
+                if begins == nil {
+                    failure = "Couldn't start \(work.name): \(error.localizedDescription)"
+                    stop()
+                }
+            }
+        }
+    }
+
+    /// One player per panel, laid out per ItemLayout, layer hidden until the
+    /// work starts (a prerolled player shows its first frame, which in the
+    /// gap would be a still of the next work, not black).
+    private func build(_ work: WorkPart) async throws -> [LivePanel] {
+        var built: [LivePanel] = []
+        do {
+            for (i, window) in windows.enumerated() {
+                guard i < work.panels.count, let path = work.panels[i].file, let d = work.durations[path], d > 0 else {
+                    built.append(LivePanel(window: window, player: nil, layer: nil, itemDuration: 0, wraps: false, frame: 1.0 / 30, grace: sync.grace))
+                    continue
+                }
+                let config = work.panels[i]
+                let pieces = ItemLayout.pieces(fileDuration: d, workLength: work.length, repeat: work.repeat,
+                                               shorter: work.shorter, cover: Self.cover, maxPieces: Self.maxSegments)
+                let (item, itemDuration, fps) = try await Self.makeItem(URL(fileURLWithPath: path), pieces: pieces)
+                let player = AVPlayer(playerItem: item)
+                // Needed for setRate(_:time:atHostTime:), which won't schedule a start
+                // on a player that's allowed to wait for buffering.
+                player.automaticallyWaitsToMinimizeStalling = false
+                player.masterClock = hostClock
+                player.isMuted = !config.audio
+                // At the end of the item, hold still rather than advance; the
+                // end is either the work's end or this screen's black (observeEnds).
+                player.actionAtItemEnd = .pause
+                let layer = attach(player, to: window, scaling: config.scaling)
+                built.append(LivePanel(window: window, player: player, layer: layer, itemDuration: itemDuration,
+                                       wraps: work.repeat == .untilNext, frame: 1 / max(fps, 1), grace: sync.grace))
+            }
+            // Wait for every item to be ready, then PREROLL: decode the first frames
+            // ahead so the start is only a clock being released, not a cold decode.
+            let players = built.compactMap(\.player)
+            while let pending = players.first(where: { $0.currentItem?.status != .readyToPlay }) {
+                if pending.currentItem?.status == .failed { throw pending.currentItem?.error ?? CocoaError(.fileReadCorruptFile) }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            for p in players { _ = await p.preroll(atRate: 1) }
+            return built
+        } catch {
+            teardown(built)
+            throw error
+        }
+    }
+
+    /// The file laid out as `pieces` in one composition (see ItemLayout).
+    private static func makeItem(_ url: URL, pieces: [ItemLayout.Piece]) async throws -> (AVPlayerItem, Double, Double) {
         let asset = AVURLAsset(url: url)
         let clip = try await asset.load(.duration)
         let fps = Double(try await asset.loadTracks(withMediaType: .video).first?.load(.nominalFrameRate) ?? 30)
-        let n = SyncMath.repeats(duration: clip.seconds, cover: cover, maxSegments: maxSegments)
         let comp = AVMutableComposition()
         let range = CMTimeRange(start: .zero, duration: clip)
-        for k in 0..<n {
-            try await comp.insertTimeRange(range, of: asset, at: CMTimeMultiply(clip, multiplier: Int32(k)))
+        var cursor = CMTime.zero
+        for piece in pieces {
+            switch piece {
+            case .clip:
+                try await comp.insertTimeRange(range, of: asset, at: cursor)
+                cursor = cursor + clip
+            case .empty(let s):
+                // On the composition as a whole, so audio goes silent with the picture.
+                comp.insertEmptyTimeRange(CMTimeRange(start: cursor, duration: CMTime(seconds: s, preferredTimescale: 1_000_000_000)))
+                cursor = cursor + CMTime(seconds: s, preferredTimescale: 1_000_000_000)
+            }
         }
         // Carry the file's rotation flag over to the composition's video track,
         // or phone footage shot upright would play sideways.
@@ -242,8 +374,68 @@ final class Playback {
            let dst = comp.tracks(withMediaType: .video).first {
             dst.preferredTransform = try await src.load(.preferredTransform)
         }
-        return (AVPlayerItem(asset: comp), CMTimeMultiply(clip, multiplier: Int32(n)).seconds, fps)
+        return (AVPlayerItem(asset: comp), comp.duration.seconds, fps)
     }
+
+    /// Hides a panel whose item ends before its work does (a shorter file
+    /// on "black"): the item stops and would hold its last frame. The end
+    /// notification came 3 ms after the end in `proofs/empty-range-probe`.
+    private func observeEnds(_ w: LoadedWork) {
+        for p in w.panels {
+            guard let item = p.player?.currentItem else { continue }
+            w.endObservers.append(NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak p] _ in
+                MainActor.assumeIsolated {
+                    guard let p, !p.wraps else { return }
+                    p.finished = true
+                    p.layer?.isHidden = true
+                }
+            })
+        }
+    }
+
+    /// Tells the loaded work's players when to start: at the work's start
+    /// if that is far enough ahead, else (loaded late, or joining) at the
+    /// position the work will have reached shortly.
+    private func startLoaded() {
+        guard let w = loaded, let now = showNow() else { return }
+        let at = SyncMath.scheduledStart(start: w.begins, now: now)
+        guard let host = clock.toHost(at) else { return }
+        for p in w.panels {
+            guard let player = p.player else { continue }
+            let into = at - w.begins
+            if !p.wraps && into >= p.itemDuration { p.finished = true; continue }   // already over: stays black
+            player.setRate(1, time: cm(expected(p, in: w, atShow: at)), atHostTime: cm(host))
+        }
+        w.scheduled = true
+        log(at == w.begins ? "\(works[w.index].name) starts on time" : String(format: "%@ starts %.2f s in", works[w.index].name, at - w.begins))
+        revealTimer?.invalidate()
+        revealTimer = timer(atShow: at) { [weak self, weak w] in
+            guard let self, let w, self.loaded === w else { return }
+            for p in w.panels where !p.finished { p.layer?.isHidden = false }
+        }
+    }
+
+    /// Takes the loaded work off the screens: black until the next one starts.
+    private func unload() {
+        revealTimer?.invalidate()
+        guard let w = loaded else { return }
+        loaded = nil
+        w.endObservers.forEach(NotificationCenter.default.removeObserver)
+        teardown(w.panels)
+    }
+
+    /// Releases a set of players: stop, detach the item, remove the layer.
+    /// The same teardown the work-switch probe ran 360 times an hour.
+    private func teardown(_ panels: [LivePanel]) {
+        for p in panels {
+            p.player?.pause()
+            p.player?.replaceCurrentItem(with: nil)
+            p.layer?.removeFromSuperlayer()
+        }
+    }
+
+    // MARK: Windows
 
     private func makeWindow(on screen: NSScreen) -> PanelWindow {
         let w = PanelWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false, screen: screen)
@@ -263,8 +455,8 @@ final class Playback {
         return w
     }
 
-    private func attach(_ player: AVPlayer, to window: PanelWindow, scaling: Scaling) {
-        guard let view = window.contentView, let root = view.layer else { return }
+    private func attach(_ player: AVPlayer, to window: PanelWindow, scaling: Scaling) -> AVPlayerLayer? {
+        guard let view = window.contentView, let root = view.layer else { return nil }
         let layer = AVPlayerLayer(player: player)
         layer.frame = view.bounds
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
@@ -274,15 +466,44 @@ final class Playback {
         // Render at the display's real pixel density, so a 4K screen gets 4K detail.
         layer.contentsScale = window.screen?.backingScaleFactor ?? 2
         layer.backgroundColor = NSColor.black.cgColor
+        layer.isHidden = true                     // [claude] until its work starts
         root.addSublayer(layer)
+        return layer
     }
+
+    // MARK: Keys
 
     private func handle(_ e: NSEvent) {
         switch e.keyCode {
-        case 53: stop()                  // Esc
-        case 49 where leads: togglePause()   // Space; a player's conductor decides (§ v3 › Show state)
+        case 53: stop()                                   // Esc
+        case 49 where leads: togglePause()                // Space; a player's conductor decides (§ v3 › Show state)
+        case 124 where leads && allowSkip: skip(forward: true)    // →
+        case 123 where leads && allowSkip: skip(forward: false)   // ←
         default: break
         }
+    }
+
+    /// [claude] → / ← (§ v4 › Playing, manual override): black now, the
+    /// chosen work after the gap. "Current" is the work playing, or in a gap
+    /// the one coming, so → in a gap skips the work about to start.
+    private func skip(forward: Bool) {
+        guard started, pausedAt == nil, let now = showNow() else { return }
+        let seg = timeline.segment(at: now, anchor: anchor.index, start: anchor.start)
+        let current: Int
+        switch seg.position {
+        case .work(let i, _): current = i
+        case .gap(let n): current = n
+        case .waiting: current = timeline.playable(from: anchor.index) ?? anchor.index
+        case .ended: return
+        }
+        guard let target = forward ? timeline.next(after: current) : timeline.previous(before: current) else { return }
+        log("\(forward ? "next" : "previous"): \(works[target].name)")
+        anchor = (target, now + timeline.settings.gap)
+        unload()
+        generation += 1                 // drop any load in flight
+        loading = nil
+        report(.playing)
+        advance()
     }
 
     private func togglePause() {
@@ -291,18 +512,35 @@ final class Playback {
         // then start() scheduled them anyway: playing, but marked as paused.
         guard started, let now = showNow() else { return }
         if let paused = pausedAt {
-            // Resume: shift the shared start by however long we were paused, then
-            // restart every panel at the same future instant.
-            let h1 = now + 0.5
-            h0 = SyncMath.resumedStart(start: h0, pausedAt: paused, resumeAt: h1)
-            pausedAt = nil
-            schedule(at: h1)
+            resume(from: paused, at: now + 0.5)
             report(.playing)
         } else {
-            panels.forEach { $0.player?.pause() }
-            pausedAt = now
+            pause(at: now)
             report(.paused)
         }
+    }
+
+    private func pause(at t: Double) {
+        pausedAt = t
+        segmentTimer?.invalidate()
+        revealTimer?.invalidate()
+        loaded?.panels.forEach { $0.player?.pause() }
+        loaded?.scheduled = false
+    }
+
+    /// Resume: the whole timeline moves later by however long we were
+    /// paused, the loaded work with it, so it carries on from where it was.
+    private func resume(from paused: Double, at h1: Double) {
+        let newStart = SyncMath.resumedStart(start: anchor.start, pausedAt: paused, resumeAt: h1)
+        shift(by: newStart - anchor.start)
+        pausedAt = nil
+        advance()
+    }
+
+    private func shift(by delta: Double) {
+        anchor.start += delta
+        loaded?.begins += delta
+        if loading != nil { generation += 1; loading = nil }    // simpler to reload than to shift a load in flight
     }
 
     /// [claude] A player brings its playback into line with the conductor's
@@ -314,53 +552,54 @@ final class Playback {
         switch s.phase {
         case .paused:
             guard pausedAt == nil else { return }
-            pausedAt = s.pausedAt
-            panels.forEach { $0.player?.pause() }
-            NSLog("follow: paused")
+            pause(at: s.pausedAt)
+            log("follow: paused")
         case .playing:
             // Same start and not paused: already doing this. (1 µs: the start
             // travels as whole nanoseconds.)
-            guard pausedAt != nil || abs(s.start - h0) > 1e-6 else { return }
-            h0 = s.start
+            guard pausedAt != nil || abs(s.start - anchor.start) > 1e-6 else { return }
+            shift(by: s.start - anchor.start)
             pausedAt = nil
-            // Still loading: start() will use the new h0 when it gets there.
-            guard started, let now = showNow() else { return }
-            let at = SyncMath.scheduledStart(start: h0, now: now)
-            schedule(at: at)
-            NSLog("follow: playing from %.2f s", at - h0)
+            log("follow: playing")
+            advance()
         case .stopped:
             break
         }
     }
 
-    private func expected(_ p: LivePanel, atShow t: Double) -> Double {
-        SyncMath.expected(host: t, start: h0, duration: p.itemDuration)
+    // MARK: Drift
+
+    private func expected(_ p: LivePanel, in w: LoadedWork, atShow t: Double) -> Double {
+        p.wraps ? SyncMath.expected(host: t, start: w.begins, duration: p.itemDuration) : t - w.begins
     }
 
     /// Once a second: is every panel where the shared clock says it should be?
     private func checkDrift() {
-        guard pausedAt == nil else { return }
+        guard pausedAt == nil, let w = loaded, w.scheduled else { return }
         let now = hostNow()
         // [claude] Where the panels should be is a question about SHOW time;
         // where they are is read on the host clock. A player with no clock
         // estimate (none yet) skips the check rather than guess.
         guard let showNow = clock.toShow(now), let h1Show = clock.toShow(now + 0.5) else { return }
-        for p in panels {
+        guard showNow >= w.begins else { return }          // not started yet (in the gap)
+        for p in w.panels where !p.finished {
             guard let player = p.player, let tb = player.currentItem?.timebase else { continue }
+            // Past the end of a work's item: it's ending (or ended); nothing to correct.
+            if !p.wraps && expected(p, in: w, atShow: h1Show) >= p.itemDuration { continue }
             // Read the panel's time at exactly `now` by converting that host
             // instant into the panel's own timebase, not by asking "what time is
             // it?" a few microseconds later for each panel in turn.
             let actual = CMSyncConvertTime(cm(now), from: hostClock, to: tb).seconds
             let stalled = player.rate == 0
-            let out = SyncMath.needsCorrection(actual: actual, expected: expected(p, atShow: showNow),
+            let out = SyncMath.needsCorrection(actual: actual, expected: expected(p, in: w, atShow: showNow),
                                                duration: p.itemDuration, frame: p.frame, tolerance: sync.tolerance)
             // A stalled panel is frozen, not drifting: waiting out the grace
             // period would only leave a still picture on screen for longer.
             // The gate is checked first so it sees every check either way.
             if p.gate.check(out: out, now: now) || stalled {
-                player.setRate(1, time: cm(expected(p, atShow: h1Show)), atHostTime: cm(now + 0.5))
+                player.setRate(1, time: cm(expected(p, in: w, atShow: h1Show)), atHostTime: cm(now + 0.5))
                 p.corrections += 1
-                NSLog("panel resynced (\(stalled ? "stalled" : String(format: "%.1f ms out", abs(actual - expected(p, atShow: showNow)) * 1000)))")
+                log("panel resynced (\(stalled ? "stalled" : String(format: "%.1f ms out", abs(actual - expected(p, in: w, atShow: showNow)) * 1000)))")
             }
         }
     }
@@ -368,8 +607,10 @@ final class Playback {
     func stop() {
         guard !stopped else { return }
         stopped = true
-        timer?.invalidate()
-        for p in panels { p.player?.pause() }
+        segmentTimer?.invalidate()
+        revealTimer?.invalidate()
+        driftTimer?.invalidate()
+        unload()
         NSApp.presentationOptions = []
         NSCursor.unhide()
         if sleepAssertion != 0 { IOPMAssertionRelease(sleepAssertion) }
@@ -378,7 +619,6 @@ final class Playback {
         // call may touch `self`.
         let ours = windows
         windows = []
-        panels = []
         // Bring the setup window back BEFORE closing ours (see init): closing
         // the panel windows first would leave no visible window, and the app
         // would quit at the end of every show.

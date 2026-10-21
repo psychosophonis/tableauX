@@ -99,9 +99,11 @@ Risk order: the stages that could kill the idea come first.
 | 3a | Players follow the conductor's Play / Space / Esc (show state); each plays its own local part | conductor's Play starts both Macs together | **built 2026-10-21, build 0.1.3; two-Mac run pending (Mat)** |
 | 3b | Conductor sends each player its part; conductor setup lists all machines | a 6-screen show set up from one MacBook | |
 | 3a ✓ | Two-MacBook run on 0.1.3 | — | **Mat 2026-10-21: "working beautifully"** (by eye; T12 photo and log not yet recorded) |
-| P0 | Probe: cycle 3 × 4K items every 10 s for 1 h (load time, memory) | v4 riskiest assumption | probe built, control fails as designed; 1 h run on this Mac in progress; Mac mini run with the tech |
+| P0 | Probe: cycle 3 × 4K items every 10 s for 1 h (load time, memory) | v4 riskiest assumption | survived 1 h on this Mac (load p95 0.19 s, no creep, memory +8.2 MB/h); control fails as designed; Mac mini run with the tech |
 | P1 | PlayerCore: v4 model, folder scan + inventory merge (T14), timeline (T15) | tests | **done** (19 tests, mutation-checked); show file v3 moves with the app in P2 |
-| P2 | One-Mac playlist playback: gap, auto-advance, →/← | a class playlist plays on one Mac | |
+| P2 | One-Mac playlist playback: gap, auto-advance, →/← | a class playlist plays on one Mac | **built 2026-10-21**: 3-work test playlist ran a full cycle on this Mac's 2 displays, checked by screenshots; →/← and Esc not yet pressed (need a person); see below |
+| P2b | Collect show / work for archiving; Import folder (linked in place) | Mat's request, 2026-10-21 | **built 2026-10-21** `[claude]`: `Collect.swift` in PlayerCore (12 tests incl. a collect → import round trip); setup buttons. Not yet run through the dialogs (they need a person) |
+| P2c | New displays take a work's left-over files (Mat's 0.3.0 report) | display added after a scan gets the next file | **built 2026-10-21** `[claude]`: `FolderScan.fill` (4 tests), run on display change, open and Scan |
 | P3 | Network: TCP channel; inventories → merged playlist → players; state with work index; file check | T16, T17 | |
 | P4 | Setup: playlist editor, folder import, per-work settings | a class set up in minutes | |
 | P5 | Two-Mac playlist run; 8 h soak on the Mac mini (T18) | release 0.3 | |
@@ -138,6 +140,13 @@ v4 P0/P1 (2026-10-21, `[claude]`):
   every 10 s. Control (`--leak`) fails as it must (+195 MB/h vs a 25 MB/h
   limit). Short runs with a 60 Mbit/s 4K clip ×3: load 0.16 s, ~30 MB,
   full frame rate.
+- 1 h run on this Mac (M3 Pro, 360 swaps, 60 Mbit/s clip ×3): SURVIVED.
+  Load median 0.17 s, p95 0.19 s, max 0.28 s (gap 3 s); no creep (×1.00);
+  861–879 frames per 10 s cycle throughout. Memory 28 → 39 MB, slope
+  +8.2 MB/h: under the 25 MB/h limit but not flat, and an hour can't tell a
+  slow plateau from a slow leak. At that rate 8 h adds ~65 MB, harmless,
+  but T18 (8 h on the Mac mini) is the run that decides it. Still to do:
+  the probe on the Mac mini with the tech.
 - FINDING, for submission guidelines: `testmedia/noise-3840x2160-10s.mp4` is
   679 Mbit/s H.264; two decode at full rate on the M3 Pro, three drop to
   ~3 fps each. Real 4K H.264 is far below that, but a student export at an
@@ -146,6 +155,35 @@ v4 P0/P1 (2026-10-21, `[claude]`):
   mutant that dropped the gaps from the loop cycle first SURVIVED: the test
   compared against one day, which happens to land in the same place either
   way. Replaced with an explicit expected value; the mutant now fails.
+
+v4 P2 (2026-10-21, `[claude]`): show file version 3 (works, playlist; a
+version 2 show opens as one work that loops until stopped); media folder +
+Scan; works list in setup; Playback per work on one timer per change.
+- PROBE `proofs/empty-range-probe.swift` FALSIFIED the first layout for
+  "shorter: black" ([clip][empty] × plays): AVFoundation drops an empty
+  range at the END of a composition (6.00 s laid out, 4.00 s built), so the
+  item would stop and hold its last frame. Empty ranges between clips
+  behaved (no frames, time ran on, a start inside one worked; also on a
+  composition with audio). Revised: items end on a clip; the app hides a
+  screen whose item ends early (end notification 3 ms after the end).
+  Survived on the 1 s test clip and the 10 s 4K clip.
+- 87 tests. Mutants caught: a trailing empty range (3 tests), skipping one
+  cycle too many (4), version 2 converted to "play once" (1).
+- App run, this Mac, 2 displays, test playlist Red (6 s + a 3 s file,
+  shorter black) / Green (4 s ×2) / Blue (one file), gap 2 s, loop: every
+  work "starts on time", loads 0.04–0.18 s, cycle exactly 25 s, back to Red
+  and on; no resyncs. Screenshots once a second matched the plan on both
+  displays (the 3 s file's display black from 3 s; black in the gaps; Blue's
+  second display black).
+- Found and fixed in that run: Play on launch was refused ("still reading
+  the file") because lengths now time the playlist; it now waits for them.
+- Version 2 show (Stage 3a's) played standalone through its 10 s loop
+  point, no resync.
+- NOT checked: → / ← and Esc (synthetic keys need Accessibility permission;
+  a person has to press them), audio, Scan in the UI (the merge itself is
+  tested), conductor/player on loopback (Mat's 0.1.3 was running and holds
+  the clock port; not closed). P2 limits network modes to a one-work
+  looping show until P3.
 
 Stage 3a (2026-10-21, `[claude]`), after Mat found on 0.1.2 that the player
 didn't start with the conductor (Stage 2 only ran the clock): the conductor
@@ -202,6 +240,13 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   two-MacBook clock run. Not published.
 - 0.1.3 (2026-10-21): Stage 3a, players follow the conductor. For the
   two-MacBook start test and the sweep-line photo (T12). Not published.
+- 0.3.0 (2026-10-21, uncommitted P2 + collect/import): one-Mac playlists,
+  Import folder, Collect show / work. For Mat's single-Mac show test.
+  Across Macs it still plays only one looping work. Not published.
+  Mat 2026-10-21: "all working very well", except a display added after a
+  scan stayed black instead of taking the left-over files.
+- 0.3.1 (2026-10-21, uncommitted): 0.3.0 + new displays take left-over
+  files (P2c). Not published.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

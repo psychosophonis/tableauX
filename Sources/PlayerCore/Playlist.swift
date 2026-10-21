@@ -93,6 +93,28 @@ public enum FolderScan {
         while panels.count < displays { panels.append(PanelConfig()) }
         return (panels, Array(ordered.dropFirst(displays)))
     }
+
+    /// [claude] A work's panels grown to `displays`: the panels already set are
+    /// kept exactly (a hand-set file, or a display left black on purpose), and
+    /// the new displays take the folder's videos that no panel uses yet, in
+    /// name order (Mat, 2026-10-21: a display plugged in after the scan should
+    /// pick up the left-over files). Returns what is still unused.
+    ///
+    /// This is APPEND-ONLY on purpose: the rescan rule is that a person's
+    /// setup is never disturbed, and the only screens nobody has set are the
+    /// ones beyond the stored panels. For the same reason it stops when the
+    /// files run out instead of padding with black: a black display that was
+    /// never stored is still "unset", so a file added to the folder later
+    /// fills it on the next scan. (Setup pads with black when it reads.)
+    public static func fill(_ panels: [PanelConfig], folder: String, files: [String], displays: Int) -> (panels: [PanelConfig], leftOver: [String]) {
+        let used = Set(panels.compactMap(\.file))
+        var unused = videos(files).filter { !used.contains("\(folder)/\($0)") }
+        var out = panels
+        while out.count < displays, !unused.isEmpty {
+            out.append(PanelConfig(file: "\(folder)/\(unused.removeFirst())"))
+        }
+        return (out, unused)
+    }
 }
 
 // MARK: - Inventory and merge (§ v4 › Media on several Macs; T14)
@@ -210,7 +232,7 @@ public struct Timeline {
 
     /// The next playable work after `i`, skipping empty ones (length 0: no
     /// files anywhere), or nil at the end of a non-looping playlist.
-    func next(after i: Int) -> Int? {
+    public func next(after i: Int) -> Int? {
         for step in 1...max(entries.count, 1) {
             let j = i + step
             if j >= entries.count && !settings.loop { return nil }
@@ -220,14 +242,55 @@ public struct Timeline {
         return nil
     }
 
+    /// [claude] The playable work before `i` (for ← on the conductor), or nil
+    /// at the start of a non-looping playlist.
+    public func previous(before i: Int) -> Int? {
+        for step in 1...max(entries.count, 1) {
+            let j = i - step
+            if j < 0 && !settings.loop { return nil }
+            let k = ((j % entries.count) + entries.count) % entries.count
+            if entries[k].length > 0 { return k }
+        }
+        return nil
+    }
+
+    /// [claude] `k` if it is playable, else the next one that is: the work
+    /// that actually plays when the timeline is anchored at `k`.
+    public func playable(from k: Int) -> Int? {
+        guard entries.indices.contains(k) else { return nil }
+        return entries[k].length > 0 ? k : next(after: k)
+    }
+
     /// What should be playing at show time `t`, given that work `k` started
     /// at show time `t0`.
     public func position(at t: Double, anchor k: Int, start t0: Double) -> PlaylistPosition {
-        guard entries.indices.contains(k) else { return .ended }
-        var elapsed = t - t0
-        if elapsed < 0 { return .waiting }
+        segment(at: t, anchor: k, start: t0).position
+    }
+
+    /// [claude] One stretch of the timeline: a play of a work (all its
+    /// repeats), a gap, the wait before the anchor, or the end.
+    public struct Segment: Equatable {
+        public var position: PlaylistPosition   // at the time asked about
+        public var begins: Double               // show time it began (-∞ while waiting)
+        public var ends: Double?                // show time it ends; nil = not by itself
+    }
+
+    /// [claude] Where the playlist is at show time `t`, and the edges of the
+    /// stretch it is in.
+    ///
+    /// The edges are what playback needs: knowing that the current work ends
+    /// at show time 1234.5, it sets ONE timer for that moment, rather than
+    /// asking "has it changed yet?" many times a second. That is the
+    /// difference between SCHEDULING an event and POLLING for it; polling
+    /// would also be late by up to its own interval at every change.
+    public func segment(at t: Double, anchor k: Int, start t0: Double) -> Segment {
+        guard entries.indices.contains(k) else { return Segment(position: .ended, begins: t0, ends: nil) }
+        if t < t0 { return Segment(position: .waiting, begins: -.infinity, ends: t0) }
         var i = k
-        if entries[i].length <= 0 { guard let n = next(after: i) else { return .ended }; i = n }
+        if entries[i].length <= 0 {
+            guard let n = next(after: i) else { return Segment(position: .ended, begins: t0, ends: nil) }
+            i = n
+        }
         // One full cycle of a looping playlist, if every work has an end: lets
         // a time days after the anchor be answered in one step, not by
         // walking through thousands of works. MODULAR ARITHMETIC, as the loop
@@ -236,16 +299,19 @@ public struct Timeline {
             ? entries.filter { $0.length > 0 }.reduce(0) { $0 + $1.span! + settings.gap } : nil
         var walkedCycle = false
         let first = i
+        var begins = t0                       // when stretch i began
         while true {
-            guard let span = entries[i].span else { return .work(index: i, elapsed: elapsed) }   // until moved on
-            if elapsed < span { return .work(index: i, elapsed: elapsed) }
-            elapsed -= span
-            guard let n = next(after: i) else { return .ended }
-            if elapsed < settings.gap { return .gap(next: n) }
-            elapsed -= settings.gap
+            guard let span = entries[i].span else {   // until moved on
+                return Segment(position: .work(index: i, elapsed: t - begins), begins: begins, ends: nil)
+            }
+            if t - begins < span { return Segment(position: .work(index: i, elapsed: t - begins), begins: begins, ends: begins + span) }
+            begins += span
+            guard let n = next(after: i) else { return Segment(position: .ended, begins: begins, ends: nil) }
+            if t - begins < settings.gap { return Segment(position: .gap(next: n), begins: begins, ends: begins + settings.gap) }
+            begins += settings.gap
             i = n
             if i == first, !walkedCycle, let cycle, cycle > 0 {
-                elapsed = elapsed.truncatingRemainder(dividingBy: cycle)
+                begins += ((t - begins) / cycle).rounded(.down) * cycle    // skip whole cycles
                 walkedCycle = true
             }
         }
@@ -263,6 +329,67 @@ public struct Timeline {
         case .black:
             let intoPlay = elapsed.truncatingRemainder(dividingBy: workLength)
             return intoPlay < fileDuration ? intoPlay : nil
+        }
+    }
+}
+
+// MARK: - One screen's player item (§ v4 › Playing)
+
+/// [claude] How one screen's player item is laid out for one work, so that
+/// the item's own time is always "seconds into the work".
+///
+/// With that property, everything playback already does (start every screen
+/// at a shared instant, join a show late, check drift once a second) works
+/// per work unchanged: each asks the item to be at "seconds into the work".
+/// The layout is the `Timeline.screenPosition` rule made into media:
+/// - `loop`: the clip end to end, as v1 loops a panel;
+/// - `black`: per play of the work, the clip then EMPTY TIME up to the work's
+///   length (an empty edit decodes nothing, so the screen shows black).
+///
+/// No piece is ever empty at the end. `proofs/empty-range-probe.swift` found
+/// that AVFoundation drops a trailing empty range (a 6 s layout became a 4 s
+/// item), so the item would stop early and hold its last frame. The item
+/// ends on a clip instead, and the app hides a screen whose item has ended
+/// before its work has.
+public enum ItemLayout {
+    public enum Piece: Equatable {
+        case clip                      // the whole file
+        case empty(Double)             // seconds of nothing
+    }
+
+    /// The pieces for a file of `fileDuration` in a work of `workLength` (one
+    /// play). A work that is "until next" has no end, so its item covers
+    /// `cover` seconds (v1's 24 h), as a v1 panel does; at most `maxPieces`.
+    public static func pieces(fileDuration d: Double, workLength l: Double, repeat r: Repeat,
+                              shorter: Shorter, cover: Double, maxPieces: Int) -> [Piece] {
+        guard d > 0 else { return [] }
+        let span: Double
+        switch r {
+        case .times(let n): span = max(l, d) * Double(n)
+        case .untilNext: span = cover
+        }
+        let tail = l - d
+        // A file as long as the work (within a millisecond) is just played
+        // back to back, whatever `shorter` says: there is no black to show.
+        if shorter == .loop || tail < 0.001 {
+            return Array(repeating: .clip, count: SyncMath.repeats(duration: d, cover: span, maxSegments: maxPieces))
+        }
+        let plays = SyncMath.repeats(duration: l, cover: span, maxSegments: max(1, (maxPieces + 1) / 2))
+        var out: [Piece] = []
+        for k in 0..<plays {
+            if k > 0 { out.append(.empty(tail)) }
+            out.append(.clip)
+        }
+        return out
+    }
+
+    /// How long an item laid out as `pieces` lasts.
+    public static func duration(_ pieces: [Piece], fileDuration d: Double) -> Double {
+        pieces.reduce(0) { total, p in
+            switch p {
+            case .clip: return total + d
+            case .empty(let s): return total + s
+            }
         }
     }
 }

@@ -155,12 +155,15 @@ final class SyncMathTests: XCTestCase {
 
 final class ShowFileTests: XCTestCase {
     func testRoundTrip() throws {
-        let show = Show(machines: [
-                            Machine(name: "Lab Mac mini", panels: [PanelConfig(file: "/a.mp4", audio: true, scaling: .fill),
-                                                                   PanelConfig(),
-                                                                   PanelConfig(file: "/c.mov")]),
-                            Machine(name: "MacBook Pro", panels: [PanelConfig(file: "/d.mov")]),
-                        ],
+        let smith = Work(name: "Smith",
+                         screens: ["Lab Mac mini": [PanelConfig(file: "Smith/1.mp4", audio: true, scaling: .fill),
+                                                    PanelConfig(),
+                                                    PanelConfig(file: "/elsewhere/c.mov")],
+                                   "MacBook Pro": [PanelConfig(file: "Smith/2.mov")]],
+                         repeat: .times(2), shorter: .loop)
+        let show = Show(machines: [Machine(name: "Lab Mac mini", displays: 3), Machine(name: "MacBook Pro", displays: 1)],
+                        works: [smith, Work(name: "Lee", repeat: .untilNext)],
+                        playlist: PlaylistSettings(gap: 5, loop: false),
                         sync: SyncSettings(tolerance: 1, grace: 10),
                         playOnLaunch: true)
         XCTAssertEqual(try ShowFile.decode(ShowFile.encode(show)), show)
@@ -168,9 +171,38 @@ final class ShowFileTests: XCTestCase {
 
     private func json(_ s: String) -> Data { s.data(using: .utf8)! }
     private let sync = #""sync":{"tolerance":3,"grace":5}"#
+    private let rest = #""works":[],"playlist":{"gap":3,"loop":true},"playOnLaunch":false"#
 
     func testNewShowHasMatsDefaults() {
-        XCTAssertEqual(Show(machines: [Machine(name: "A")]).sync, SyncSettings(tolerance: 3, grace: 5))
+        let show = Show(machines: [Machine(name: "A")])
+        XCTAssertEqual(show.sync, SyncSettings(tolerance: 3, grace: 5))
+        XCTAssertEqual(show.playlist, PlaylistSettings(gap: 3, loop: true))
+        XCTAssertEqual(show.version, 3)
+    }
+
+    /// [claude] § v4 › Model: a version 2 show opens as a one-work playlist
+    /// that plays as it always did (until stopped, each panel looping on its
+    /// own length), with every machine's panels and absolute paths kept.
+    func testVersion2OpensAsOneWorkThatLoopsUntilStopped() throws {
+        let v2 = #"{"version":2,"machines":[{"name":"Lab","panels":[{"file":"/v/a.mp4","audio":true,"scaling":"fill"},{"audio":false,"scaling":"fit"}]},"#
+            + #"{"name":"Laptop","panels":[{"file":"/v/b.mp4","audio":false,"scaling":"fit"}]}],"#
+            + sync + #","playOnLaunch":true}"#
+        let show = try ShowFile.decode(json(v2))
+        XCTAssertEqual(show.version, 3)
+        XCTAssertEqual(show.machines, [Machine(name: "Lab", displays: 2), Machine(name: "Laptop", displays: 1)])
+        XCTAssertEqual(show.works.count, 1)
+        XCTAssertEqual(show.works[0].repeat, .untilNext)
+        XCTAssertEqual(show.works[0].shorter, .loop)
+        XCTAssertEqual(show.works[0].screens["Lab"], [PanelConfig(file: "/v/a.mp4", audio: true, scaling: .fill), PanelConfig()])
+        XCTAssertEqual(show.works[0].screens["Laptop"]?.first?.file, "/v/b.mp4")
+        XCTAssertTrue(show.playOnLaunch)
+        // Saved again, it is a version 3 file.
+        XCTAssertEqual(try ShowFile.decode(ShowFile.encode(show)), show)
+    }
+
+    func testRefusesANegativeGap() {
+        let s = #"{"version":3,"machines":[{"name":"A","displays":1}],"works":[],"playlist":{"gap":-1,"loop":true},"# + sync + #","playOnLaunch":false}"#
+        XCTAssertThrowsError(try ShowFile.decode(json(s))) { XCTAssertEqual($0 as? ShowFileError, .invalidGap(-1)) }
     }
 
     // [claude] Version 1 (0.1.1) files are refused, by name, not with a
@@ -182,26 +214,27 @@ final class ShowFileTests: XCTestCase {
     }
 
     func testRefusesAFutureVersion() {
-        XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":3,"machines":[],"playOnLaunch":false}"#))) {
-            XCTAssertEqual($0 as? ShowFileError, .unsupportedVersion(3))
+        XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":4,"machines":[],"playOnLaunch":false}"#))) {
+            XCTAssertEqual($0 as? ShowFileError, .unsupportedVersion(4))
         }
     }
 
     func testUnknownScalingIsAnError() {
-        let s = #"{"version":2,"machines":[{"name":"A","panels":[{"audio":false,"scaling":"stretch"}]}],"#
-            + sync + #","playOnLaunch":false}"#
+        let s = #"{"version":3,"machines":[{"name":"A","displays":1}],"works":[{"name":"W","screens":{"A":[{"audio":false,"scaling":"stretch"}]},"repeat":1,"shorter":"black"}],"#
+            + #""playlist":{"gap":3,"loop":true},"# + sync + #","playOnLaunch":false}"#
         XCTAssertThrowsError(try ShowFile.decode(json(s)))
     }
 
     func testAShowNeedsAMachine() {
-        XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":2,"machines":[],"# + sync + #","playOnLaunch":false}"#))) {
-            XCTAssertEqual($0 as? ShowFileError, .noMachines)
+        for v in [#"{"version":3,"machines":[],"# + sync + "," + rest + "}",
+                  #"{"version":2,"machines":[],"# + sync + #","playOnLaunch":false}"#] {
+            XCTAssertThrowsError(try ShowFile.decode(json(v))) { XCTAssertEqual($0 as? ShowFileError, .noMachines) }
         }
     }
 
     func testRefusesNonsenseSync() {
         for bad in [#""sync":{"tolerance":0,"grace":5}"#, #""sync":{"tolerance":3,"grace":-1}"#] {
-            XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":2,"machines":[{"name":"A","panels":[]}],"# + bad + #","playOnLaunch":false}"#)))
+            XCTAssertThrowsError(try ShowFile.decode(json(#"{"version":3,"machines":[{"name":"A","displays":1}],"# + bad + "," + rest + "}")))
         }
     }
 
