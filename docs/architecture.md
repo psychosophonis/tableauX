@@ -12,7 +12,7 @@ and produces artefacts.
 
 Non-goals (v1): network sync between computers (planned: see "v3"
 below), projection warping or edge blending, routing audio to particular
-output devices, playlists, editing.
+output devices, playlists (see "v4"), editing.
 
 ## Targets (measurable)
 
@@ -109,6 +109,10 @@ A 1920 × 1080 file on a 3840 × 2160 display is exactly 2×.
   menu bar for playback posts one too, and must not stop the show.
 
 ## v2 DRAFT: several videos per display, sync control
+
+<!-- [claude] DEFERRED 2026-10-21 (Mat): playlists of students' multiscreen
+works (v4) come first; several videos on one screen now looks like a stretch
+feature with few uses. Kept for reference, not scheduled. -->
 
 <!-- [claude] Drafted 2026-10-21 from Mat's choices: free rectangles; sync
 groups, per-video offsets, free-running videos and live nudge; per-video audio.
@@ -340,6 +344,126 @@ Result (2026-10-21, two MacBooks on the university Wi-Fi, ~9 min): T10 pass
 samples 15.2 ms); clock drift −12 ppm. Replayed through `ClockEstimator` in
 `ClockReplayTests`: 0.27 ms, and 0.40 ms worst across a simulated 300 s
 dropout. Steadiness is shown; accuracy (T12) is not yet.
+
+## v4: playlists of works (release 0.3)
+
+<!-- [claude] Drafted 2026-10-21 from Mat: classes of students submit
+multiscreen works to be played in succession, some with audio, some without;
+a single piece must still be able to loop; "mature playlisting and show
+coordination and management", ahead of v2. Mat's decisions so far are marked
+(Mat). Claude's proposals were confirmed by Mat on 2026-10-21 ("yes"),
+including the 1–5 example below, so this section is normative. Playlists are
+release 0.3 (Mat: "move to three"). Builds on v3. -->
+
+### Terms
+- A **work** is what a show is in v1–v3: one file per screen, across all the
+  Macs, with audio per screen. One student's piece.
+- A **playlist** is an ordered list of works. The show file holds one
+  playlist. A single looping piece is a playlist of one work set to loop.
+- **Screens are numbered across the Macs**: the first Mac's displays 1..n,
+  then the next Mac's, in the order the show lists the Macs. A six-file work
+  spans two three-screen Macs.
+
+### Getting works in (Mat)
+- **No copying between Macs (Mat):** each Mac holds only the files for its
+  own screens, in its own **media folder** (the class folder; a setting
+  per Mac, like the mode).
+- **Folder scan (default):** each Mac scans its own media folder. Each
+  subfolder is one work, in name order. Inside it, that Mac's video files are
+  sorted by name, numbers compared as numbers (2 before 10), and assigned to
+  that Mac's displays 1, 2, 3, … More files than the Mac has displays: the
+  first ones are used and the work shows a warning listing those left out.
+- **The folder name joins a work across Macs (Mat):** `Smith` with 2 files on
+  the conductor and 3 on a player is one work of 5 screens: conductor
+  displays 1–2, player displays 1–3. A Mac with no folder of that name shows
+  black for that work. (A file can only play on the Mac it is stored on, so
+  each Mac's files always land on that Mac's displays.)
+- **Audio defaults to off** on every screen (Mat), switchable per screen.
+- **Manual (Mat):** any screen of any work can be set by hand. The
+  conductor's setup lists every Mac's media folder contents, so a player's
+  screen is chosen from the files that player reported, without visiting it.
+- Works can be reordered and skipped; a rescan adds new folders without
+  disturbing works already set up.
+
+### Playing (Mat: auto-advance with manual override; black gap)
+- Each work has a **repeat**: once, N times, or until moved on (a single
+  piece on a loop). Default: once.
+- When a work's repeats are done, all screens go **black together for the
+  gap** (default 3 s, set per playlist), the next work loads during it, and
+  starts in sync. The playlist loops to the first work after the last.
+- **Manual override** on the conductor: Next, Previous, jump to a chosen work,
+  plus v1's Space (pause) and Esc (stop). Keys: → next, ← previous; jump
+  from setup.
+- **Screens of different lengths (Mat: an option):** per work, "shorter
+  screens go black when done" (default) or "shorter screens loop until the
+  longest ends". The work lasts as long as its longest file either way.
+
+### Timing
+- The playlist's timeline is a PURE FUNCTION of the playlist, the files'
+  durations and a start time: from those, any Mac can say which work is on and
+  how far in, at any show time. So automatic advances need no message: every
+  Mac changes work at the same show time, the way v3 Macs already share a
+  start. Only a person's action (Next, jump, pause) changes the state, which
+  is then sent as in v3 › Show state, extended with the work index and that
+  work's start.
+- Durations are measured on the conductor and sent with the playlist, so
+  every Mac uses the same numbers even if a file's metadata reads slightly
+  differently on another Mac.
+- A "until moved on" work has no end: the timeline stops there until Next.
+
+### Media on several Macs
+- Video is never streamed (v3), and nothing is copied between Macs (Mat).
+- **Inventory:** each player sends the conductor what its scan found (per
+  folder: file names, sizes, durations, frame rates, audio or not). The
+  conductor merges every Mac's inventory into one playlist and sends it back
+  to the players with each work's length, so every Mac computes the same
+  timeline.
+- These messages go over a **TCP connection** from each player to the
+  conductor, beside the UDP clock. They are too big for one UDP packet and
+  must not be lost; the clock stays on UDP, where a late packet is worse than
+  a lost one.
+- Before Play the conductor checks that every Mac still has what it reported
+  (name, size and modification date; no hashing of whole video files),
+  and lists anything missing, per Mac.
+- A Mac that joins or rescans later sends a new inventory; the conductor
+  updates the playlist and resends it.
+
+### Model
+```
+Show {                                  // the conductor's file
+  version: 3
+  machines: [{ name, displays: int }]   // order = screen numbering in setup
+  works: [Work]                         // playlist order
+  playlist: { gap: seconds, loop: bool }
+  sync: Sync                            // as v3
+  playOnLaunch: bool
+}
+Work {
+  name: string                          // = the folder name on every Mac
+  screens: { machineName: [Panel] }     // per Mac, index = that Mac's display - 1
+  repeat: { once } | { times: int } | { untilNext }
+  shorter: "black" | "loop"
+}
+Panel { file: string | null, audio: bool, scaling }   // file relative to that Mac's media folder
+```
+A version 2 show opens as a one-work playlist.
+
+### Targets
+| # | Target | How it is checked |
+|---|--------|-------------------|
+| T14 | Folder scan assigns files to screens as specified (sort, overflow, black), and inventories from several Macs merge into works by folder name | PlayerCore tests |
+| T15 | The timeline gives the same work and position on every Mac for any show time | PlayerCore tests (pure function) |
+| T16 | Every screen on every Mac starts each work within `sync.tolerance`, with no screen late out of the gap | two-Mac run, sweep-line works in a playlist, photographed at a change |
+| T17 | Next / Previous / jump take effect on every Mac within gap + 1 s | two-Mac run |
+| T18 | A 20-work playlist runs unattended for 8 h: no stop, no growing memory, no work starting late | soak run on the Mac mini, log of each change |
+
+### Riskiest assumption, and its cheapest test
+That the Mac mini can tear down one work's three 4K players and build the
+next one's, over and over, inside the gap, for hours, without load times
+creeping up or memory growing. v1 built players once per show; nothing yet
+shows that doing it every few minutes is clean. The cheapest test is a probe
+on one Mac (then the Mac mini): cycle three 4K items every 10 s for an hour,
+logging each load time and the process's memory. It needs no playlist code.
 
 ## API Contracts (PlayerCore library)
 

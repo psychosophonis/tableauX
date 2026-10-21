@@ -98,8 +98,15 @@ Risk order: the stages that could kill the idea come first.
 | 2 | Clock service over UDP in the app (the probe as a component) | two Macs hold a steady estimate in the app | built, loopback checks pass; **two-Mac run pending (Mat)** |
 | 3a | Players follow the conductor's Play / Space / Esc (show state); each plays its own local part | conductor's Play starts both Macs together | **built 2026-10-21, build 0.1.3; two-Mac run pending (Mat)** |
 | 3b | Conductor sends each player its part; conductor setup lists all machines | a 6-screen show set up from one MacBook | |
+| 3a ✓ | Two-MacBook run on 0.1.3 | — | **Mat 2026-10-21: "working beautifully"** (by eye; T12 photo and log not yet recorded) |
+| P0 | Probe: cycle 3 × 4K items every 10 s for 1 h (load time, memory) | v4 riskiest assumption | not started |
+| P1 | PlayerCore: v4 model, folder scan + inventory merge (T14), timeline (T15) | tests | v4 confirmed (Mat, 2026-10-21) |
+| P2 | One-Mac playlist playback: gap, auto-advance, →/← | a class playlist plays on one Mac | |
+| P3 | Network: TCP channel; inventories → merged playlist → players; state with work index; file check | T16, T17 | |
+| P4 | Setup: playlist editor, folder import, per-work settings | a class set up in minutes | |
+| P5 | Two-Mac playlist run; 8 h soak on the Mac mini (T18) | release 0.3 | |
 | 4 | Two-MacBook sweep test (T12), dropout test (T13) | within 1 frame; no visible desync | release 0.2 |
-| later | v2 multi-video | needs the six v2 ▸ decisions, decode-load probe (T9) | spec draft |
+| later | v2 multi-video | needs the six v2 ▸ decisions, decode-load probe (T9) | **deferred** (Mat, 2026-10-21: playlists first) |
 
 Stage 1 notes (2026-10-21): `ClockEstimator` keeps the fastest exchange of
 the last 2 s (min-RTT) and a drift rate fitted over 60 s, so it extrapolates
@@ -175,7 +182,8 @@ Stage 1 replay, `[claude]` `ClockReplayTests` (the same recording through
 
 ### Test builds
 Each build handed out for testing gets the next patch number, so a report
-can name exactly what was run; 0.2.0 is the release once Stage 4 passes.
+can name exactly what was run. Playlist builds are 0.3.x (Mat: "move to three");
+whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
 - 0.1.2 (2026-10-21, commit 5f7ab71): Stage 2, clock service. For the
   two-MacBook clock run. Not published.
 - 0.1.3 (2026-10-21): Stage 3a, players follow the conductor. For the
