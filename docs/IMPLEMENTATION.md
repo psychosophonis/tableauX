@@ -156,6 +156,12 @@ Stage 1 replay, `[claude]` `ClockReplayTests` (the same recording through
 - v2 (several videos per display, sync groups/offsets/nudge): spec DRAFT in
   docs/architecture.md, awaiting Mat's confirmation of the ▸ decisions.
 
+### Test builds
+Each build handed out for testing gets the next patch number, so a report
+can name exactly what was run; 0.2.0 is the release once Stage 4 passes.
+- 0.1.2 (2026-10-21, commit 5f7ab71): Stage 2, clock service. For the
+  two-MacBook clock run. Not published.
+
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen
 Player", repo /tableau) was published minutes earlier and then deleted at
