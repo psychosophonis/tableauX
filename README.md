@@ -36,6 +36,81 @@ checking the app. Later launches are quick. Once the window is up, a line
 at the top says what tableauX is doing (finding the library, measuring
 videos); **Skip** lets you get on with it.
 
+## Running one playlist on a triptych
+
+<!-- [claude] 2026-10-22: the technician's sheet for the single-Mac case
+     (one Mac mini, three displays, one looping playlist). Nothing here
+     needs the network or a second Mac. -->
+One Mac mini plays one playlist across three displays in a row, in sync, on
+a loop. Setup takes about 20 minutes; after that it runs itself. You need
+**tableauX.app**, a **`tableauX` library folder** prepared by the show's
+author (videos plus a playlist set to start on its own), the three displays
+connected, and an admin login.
+
+### 1. Set up the Mac
+
+1. **Arrange the displays.** System Settings → Displays → Arrange: put the
+   three in a row, **left to right as they physically stand**. tableauX
+   numbers them 1, 2, 3 from this layout; a wrong order puts videos on the
+   wrong screens.
+2. **Native resolution on each display** ("Default" for a 4K display).
+   Avoid "More Space" and other scaled settings: macOS resamples the
+   picture, which is what this app exists to avoid.
+3. **Copy the library** into your home folder's **Movies** folder, so the
+   path is `Movies/tableauX`. Don't rename it.
+4. **Install the app:** drag tableauX into Applications, then open it as in
+   [First launch](#first-launch). If macOS asks about finding devices on
+   the local network, click **Allow**.
+
+### 2. Start and check it
+
+When tableauX opens, all three displays go black and then start together.
+Each work plays, the screens go black for a few seconds, the next work
+starts, and after the last it goes back to the first. If the window stays
+up instead, check the Show menu names the right show and click **Present**.
+
+- [ ] Each video is on the right display (if two are swapped, fix the
+      arrangement in step 1).
+- [ ] The three displays are in step: a phone photo of the whole row shows
+      the same moment on all three.
+- [ ] It moves from work to work on its own and loops after the last.
+
+Keys: **Space** pauses and resumes, **→ / ←** next or previous work,
+**Esc** back to the window. Don't change anything in the window: the show
+saves itself.
+
+### 3. Make it run unattended
+
+1. **Open at login:** System Settings → General → Login Items → **+** →
+   tableauX.
+2. **Log in automatically** (if policy allows): System Settings → Users &
+   Groups → Automatically log in as → the show account.
+3. **Restart after a power cut:** System Settings → Energy → **Start up
+   automatically after a power failure**.
+4. **Test it:** restart the Mac; the show should play with no one touching
+   it.
+
+tableauX keeps the displays awake while it plays. To stop: **Esc**, then
+quit (⌘Q), or shut the Mac down.
+
+### 4. If something goes wrong
+
+| What you see | Do this |
+|---|---|
+| The show stopped and the window came back | A display was unplugged or rearranged. Reconnect it, check the arrangement, click **Present**. |
+| One display is black | That screen may have no video in this work. If it's black in every work, check the cable and the arrangement. |
+| Videos on the wrong displays | Fix the left-to-right arrangement in System Settings → Displays. |
+| The window says it can't find the library | The folder must be `Movies/tableauX`, with that exact name. |
+| Stutter, or one display falls behind | Note the time and send the log (below) to the show's author. |
+
+To get the log: press Esc, open Terminal and run
+
+```
+log show --last 1h --predicate 'process == "tableauX"' > ~/Desktop/tableauX-log.txt
+```
+
+then send `tableauX-log.txt` from the Desktop, with a phone photo if you can.
+
 ## Use
 
 The window is where you compose a show: its works, and each work's screens
