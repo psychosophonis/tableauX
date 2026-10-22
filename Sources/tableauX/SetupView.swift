@@ -1,92 +1,63 @@
 import PlayerCore
 import SwiftUI
 
-/// The setup window (docs/architecture.md § UI): one row per connected display,
-/// then problems, then the show's buttons.
+/// The setup window, i.e. Compose (docs/architecture.md § v4 › Compose and
+/// Present): the show and its works, the selected work's screens as the
+/// tableau, then this Mac's settings and one status line.
 ///
 /// The view holds no state of its own. Every control reads from and writes to
 /// the AppModel through a BINDING (the `$model.show...` paths): a two-way
 /// reference into the model, so flipping a toggle edits the show itself and
-/// SwiftUI redraws whatever depends on it. Save writes exactly what is on
-/// screen, because the screen is the model.
+/// SwiftUI redraws whatever depends on it. A named show saves itself, so what
+/// is on screen is what is in the file.
+///
+/// [claude] Interface step 1 (Mat, 2026-10-22): the per-display list, the
+/// "Screens on" switcher and the other Macs' rows became the TableauMap; the
+/// red and orange problem sentences became the StatusLine; the Scan button
+/// went (the library is re-read by itself).
 struct SetupView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ShowRow(model: model)
+            TableauSizeRow(model: model)        // [claude] the show's display counts, for every work
             MediaRow(model: model)
             // [claude] A fresh Mac: say what was made and what to do next.
             if model.libraryCreated, model.ownWorks.isEmpty {
-                Text("tableauX made a library for you in Movies → \(ShowFolder.name). Put each work in a folder inside \(ShowFolder.worksName) (Show in Finder), then press Scan.")
+                Text("tableauX made a library for you in Movies → \(ShowFolder.name). Put each work in a folder inside \(ShowFolder.worksName) (Show in Finder); it appears here by itself.")
                     .foregroundStyle(.secondary)
             }
             PlaylistList(model: model)
             Divider()
-            if model.displays.isEmpty {
-                Text("No displays found.").foregroundStyle(.secondary)
-            }
-            // [claude] The selected work's panels on this Mac. panels(of:)
-            // pads to one per display; with no part for this Mac (or no
-            // work) there are no rows, and the problem list says why.
             if model.show.works.indices.contains(model.selectedWork) {
                 // [claude] P3b: on a player these show the conductor's
                 // playlist, read-only: an edit here would be overwritten by
                 // the next playlist the conductor sends.
                 WorkSettingsRow(work: $model.show.works[model.selectedWork], length: model.length(of: model.selectedWork))
                     .disabled(model.mode == .player)
-                // [claude] P4a: on the conductor, any Mac's screens.
-                if model.mode == .conductor, !model.otherMachines.isEmpty {
-                    Picker("Screens on", selection: $model.editingMachine) {
-                        Text("This Mac").tag(String?.none)
-                        ForEach(model.otherMachines, id: \.name) { Text($0.name).tag(String?.some($0.name)) }
-                    }
-                    .pickerStyle(.segmented)
-                }
-                if model.mode == .conductor, let m = model.editingMachine, model.otherMachines.contains(where: { $0.name == m }) {
-                    RemoteScreens(model: model, machine: m)
-                } else {
-                    // [claude] Every display the show is DESIGNED for (Mat,
-                    // 2026-10-22), connected here or not, so a laptop can
-                    // set up and preview a 3-display Mac's part.
-                    if model.mode != .player, let me = model.machineName {
-                        Stepper("Displays in this show: \(model.designDisplays)",
-                                value: Binding(get: { model.designDisplays }, set: { model.setDisplays(me, $0) }),
-                                in: max(model.displays.count, 1)...16)
-                            .help("How many displays this Mac has in the show's design. Displays not connected here can still be set up and previewed; a show plays on those that are connected.")
-                    }
-                    ForEach(0 ..< model.designDisplays, id: \.self) { i in
-                        if i < model.panels.count {
-                            PanelRow(number: i + 1, display: i < model.displays.count ? model.displays[i] : nil,
-                                     panel: model.panelBinding(i), model: model)
-                                .disabled(model.mode == .player)
-                            Divider()
-                        }
-                    }
-                }
+                TableauMap(model: model)
             }
+            Divider()
             SyncRow(sync: $model.show.sync)
             NetworkRow(model: model)
-            ProblemList(problems: model.problems, lastError: model.lastError)
+            StatusLine(model: model)
             HStack {
-                Button("Open…") { model.openDialog() }.keyboardShortcut("o")
                 // [claude] A named show saves itself (autosave); this makes a
                 // copy under a new name. Only the unsaved all-works show
-                // needs naming once: then it reads "Save…".
+                // needs naming once: then it reads "Save…". (Open… and
+                // "Open in Present mode" moved into the Show menu: Mat's
+                // review, 2026-10-22.)
                 Button(model.showPath == nil ? "Save…" : "Save As…") { model.saveDialog() }.keyboardShortcut("s")
                     .help(model.showPath == nil ? "Name this show and save it into the library's Shows folder. From then on it saves itself."
                                                 : "Changes save themselves. Save As… makes a copy under a new name.")
-                // [claude] Compose/Present (Mat): the show file's playOnLaunch,
-                // named for what it does. For gallery Macs.
-                Toggle("Open in Present mode", isOn: $model.show.playOnLaunch)
-                    .help("When tableauX opens with this show, it starts presenting full screen by itself: for gallery Macs.")
                 Spacer()
             }
-            Text("Presenting or previewing: Space pauses or resumes, → next work, ← previous work, Esc returns to Compose.")
+            Text("Presenting or previewing: Space pauses or resumes, → next work, ← previous work, Esc comes back here.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding()
-        .frame(minWidth: 640)
+        .frame(minWidth: 760)
         .onAppear {
             model.launched()
             // [claude] Nothing focused when the window opens: SwiftUI focused
@@ -95,148 +66,6 @@ struct SetupView: View {
             DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
         }
     }
-}
-
-/// One display and the panel that plays on it.
-private struct PanelRow: View {
-    let number: Int
-    let display: DisplayInfo?           // [claude] nil: in the design, not connected here
-    @Binding var panel: PanelConfig
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(display.map { "Display \(number): \($0.name)  ·  \(size($0.pixelSize))" }
-                 ?? "Display \(number) (not connected here)")
-                .font(.headline)
-                .foregroundStyle(display == nil ? .secondary : .primary)
-            HStack {
-                fileLabel
-                Spacer()
-                Button("Choose…") { model.choose(panel: number - 1) }
-                Button("Clear") { model.clear(panel: number - 1) }.disabled(panel.file == nil)
-            }
-            HStack(spacing: 16) {
-                Toggle("Audio", isOn: $panel.audio).disabled(info?.hasAudio == false)
-                Picker("Scaling", selection: $panel.scaling) {
-                    Text("Fit").tag(Scaling.fit)
-                    Text("Fill").tag(Scaling.fill)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 140)
-                if let info { Text(details(info)).foregroundStyle(.secondary) }
-            }
-        }
-    }
-
-    private var info: MediaInfo? { panel.file.flatMap { model.media[model.resolve($0)] } }
-
-    @ViewBuilder private var fileLabel: some View {
-        if let file = panel.file {
-            let path = model.resolve(file)
-            let name = (path as NSString).lastPathComponent
-            if model.fileExists(path) {
-                Text(name).help(path)
-            } else {
-                Label("\(name) (missing)", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red).help(path)
-            }
-        } else {
-            Text("No file: this display stays black").foregroundStyle(.secondary)
-        }
-    }
-
-    /// e.g. "1920 × 1080 · 10.0 s · 2× on this display", plus "no audio track".
-    ///
-    /// The factor is computed against the display's real PIXELS, not its
-    /// points, because pixels are what get resampled. A whole number (2×) means
-    /// every source pixel maps to a clean block of screen pixels; anything else
-    /// means the image is interpolated, which is worth knowing before a show.
-    private func details(_ info: MediaInfo) -> String {
-        var parts = [size(info.size), String(format: "%.1f s", info.duration)]
-        if let display {                // the scale factor needs a real display to measure against
-            parts.append("\(factor(Placement.scale(video: info.size, display: display.pixelSize, scaling: panel.scaling))) on this display")
-        }
-        if !info.hasAudio { parts.append("no audio track") }
-        return parts.joined(separator: "  ·  ")
-    }
-
-    private func size(_ s: CGSize) -> String { "\(Int(s.width)) × \(Int(s.height))" }
-
-    private func factor(_ s: CGFloat) -> String {
-        s == s.rounded() ? "\(Int(s))×" : String(format: "%.2f×", Double(s))
-    }
-}
-
-/// [claude] P4a: another Mac's screens for the selected work, set from the
-/// conductor using the files that Mac reported (§ Getting works in › Manual).
-/// The file menu is the whole of that Mac's media folder, so a screen can
-/// take any of its files, from any folder: the way to fix files that were
-/// named or numbered wrongly without visiting the Mac.
-private struct RemoteScreens: View {
-    @ObservedObject var model: AppModel
-    let machine: String
-
-    var body: some View {
-        let files = model.reportedFiles(of: machine)
-        VStack(alignment: .leading, spacing: 8) {
-            if model.inventory(of: machine) == nil {
-                Text("\(machine) hasn't reported its files since this Mac became Conductor, so they aren't listed. Its saved screens are shown.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if !model.isConnected(machine) {
-                Text("\(machine) isn't connected: its files are as it last reported them. Changes reach it when it reconnects.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            // [claude] The design's count for that Mac (never shrunk by a report).
-            let count = model.show.machines.first(where: { $0.name == machine })?.displays ?? 0
-            Stepper("Displays in this show: \(count)",
-                    value: Binding(get: { count }, set: { model.setDisplays(machine, $0) }), in: 1...16)
-            let panels = model.panels(on: machine)
-            if panels.isEmpty { Text("\(machine) has reported no displays yet.").foregroundStyle(.secondary) }
-            ForEach(panels.indices, id: \.self) { i in
-                RemotePanelRow(number: i + 1, machine: machine, files: files, panel: model.panelBinding(on: machine, i))
-                Divider()
-            }
-        }
-    }
-}
-
-private struct RemotePanelRow: View {
-    let number: Int
-    let machine: String
-    let files: [(path: String, file: InventoryFile)]
-    @Binding var panel: PanelConfig
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("\(machine), display \(number)").font(.headline)
-            HStack(spacing: 16) {
-                Picker("File", selection: $panel.file) {
-                    Text("None: this display stays black").tag(String?.none)
-                    // A saved file the Mac no longer reports stays visible,
-                    // marked, rather than silently vanishing from the menu.
-                    if let f = panel.file, !files.contains(where: { $0.path == f }) {
-                        Text("\(f) (not reported)").tag(String?.some(f))
-                    }
-                    ForEach(files, id: \.path) { Text($0.path).tag(String?.some($0.path)) }
-                }
-                .frame(maxWidth: 420)
-                Toggle("Audio", isOn: $panel.audio).disabled(info?.hasAudio == false)
-                Picker("Scaling", selection: $panel.scaling) {
-                    Text("Fit").tag(Scaling.fit)
-                    Text("Fill").tag(Scaling.fill)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 140)
-            }
-            if let info {
-                Text(String(format: "%.1f s  ·  %.0f fps%@", info.duration, info.fps, info.hasAudio ? "" : "  ·  no audio track"))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var info: InventoryFile? { panel.file.flatMap { f in files.first(where: { $0.path == f })?.file } }
 }
 
 /// [claude] P4d: which show is open, and switching between the library's
@@ -256,7 +85,13 @@ private struct ShowRow: View {
                 }
                 if !model.showFiles.isEmpty { Divider() }
                 Button("New show…") { model.newShow() }
-                Button("Open another…") { model.openDialog() }
+                Button("Open a show from elsewhere…") { model.openDialog() }
+                Divider()
+                // [claude] Mat's review (2026-10-22): off the main window;
+                // only an unattended gallery Mac needs these.
+                Toggle("Start presenting when tableauX opens", isOn: $model.show.playOnLaunch)
+                Button("Export show as a library…") { model.exportShow() }
+                    .disabled(model.collecting != nil || model.show.works.isEmpty)
             }
             .frame(maxWidth: 360)
             .disabled(model.mode == .player)
@@ -268,22 +103,15 @@ private struct ShowRow: View {
             Button("Preview") { model.preview() }
                 .disabled(model.isPlaying || model.show.works.isEmpty)
                 .help("Play the show in a window: every screen of every Mac as a tile, a row per Mac, from the files on this Mac. For checking order, timing and assignment; a laptop may not decode a whole tableau smoothly.")
+            // [claude] Mat's review (2026-10-22): no Compose switch, the
+            // window is where you compose; two plain actions.
             if model.mode == .player {
                 Text("Presents when the conductor does").foregroundStyle(.secondary)
             } else {
-                Picker("", selection: Binding(get: { model.isPlaying && !model.previewing ? 1 : 0 },
-                                              set: { if $0 == 1 { model.play() } else { model.stop() } })) {
-                    Text("Compose").tag(0)
-                    Text(presentLabel).tag(1)
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .disabled(model.isPlaying || !model.problems.blocking.isEmpty)
-                .help("Present: play the show full screen on this Mac's displays (and, as Conductor, on every player). Esc returns to Compose.")
-                Button("") { model.play() }                    // Return presents, as Play did
+                Button(presentLabel) { model.play() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(model.isPlaying || !model.problems.blocking.isEmpty)
-                    .frame(width: 0).opacity(0)
+                    .help("Play the show full screen on this Mac's displays (and, as Conductor, on every player). Esc comes back here.")
             }
         }
     }
@@ -296,8 +124,9 @@ private struct ShowRow: View {
     }
 }
 
-/// [claude] This Mac's media folder and the Scan button (§ v4 › Getting
-/// works in). A setting of this Mac, not of the show, like the mode.
+/// [claude] This Mac's library (§ v4 › Library). A setting of this Mac, not
+/// of the show, like the mode. No Scan button since interface step 1: the
+/// library is re-read when the app comes back to the front and every 5 s.
 private struct MediaRow: View {
     @ObservedObject var model: AppModel
 
@@ -306,7 +135,6 @@ private struct MediaRow: View {
             Text("Library:")
             // [claude] P4b: say where the folder came from, or where it was
             // looked for, so a Mac that found nothing says what to do.
-            // P4d: it is a library now (Works/ and Shows/, or works directly).
             Text(model.libraryFolder.isEmpty
                  ? "no \(ShowFolder.name) folder found (looked in and beside the app's folder, and in your home folder, Movies and Desktop)"
                  : model.libraryFolder)
@@ -317,17 +145,14 @@ private struct MediaRow: View {
             Button("Show in Finder") { model.revealLibrary() }.disabled(model.libraryFolder.isEmpty)
                 .help("Open the library's Works folder: one folder per work goes in here.")
             Button("Choose…") { model.chooseMediaFolder() }
-            Button("Scan") { model.scan() }.disabled(model.mediaFolder.isEmpty)
-                .help("Re-read the library's works. Files go on screens by their _N number, else in name order. Only the unsaved all-works show gains new works; add them to a saved show with Add from library.")
-            Button("Import folder…") { model.importFolder() }
+            Button("Import work…") { model.importFolder() }
                 .disabled(model.mode == .player)      // a player's works come from the conductor
-                .help("Add works from a folder anywhere, linked where they are (not copied). The folder's own videos are one work; each folder inside it is another.")
+                .help("Choose a folder of videos: it becomes a work, linked where it is (not copied); Collect brings it into the library later. A folder of folders brings in one work per folder.")
         }
     }
 }
 
-/// [claude] The playlist: one line per work, click to edit its panels below.
-/// Basic for now (P2); the full editor and jump-to are P4.
+/// [claude] The playlist: one line per work, click to edit its screens below.
 private struct PlaylistList: View {
     @ObservedObject var model: AppModel
 
@@ -343,7 +168,7 @@ private struct PlaylistList: View {
             }
             .disabled(model.mode == .player)
             if model.mode == .player {
-                Text("This is the conductor's playlist. Change it on the conductor; Scan here sends this Mac's files to it.")
+                Text("This is the conductor's show. Change it on the conductor; this Mac's files reach it by themselves.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(Array(model.show.works.enumerated()), id: \.offset) { w, work in
@@ -360,8 +185,8 @@ private struct PlaylistList: View {
                                 .help("Remove from this show. The work's files stay in the library.")
                         }
                         .disabled(model.mode == .player)
-                        Button("Collect…") { model.collectWork(w) }.disabled(model.collecting != nil)
-                            .help("Copy this work's files on this Mac into one folder, for archiving.")
+                        Button("Collect") { model.collectWork(w) }.disabled(model.collecting != nil)
+                            .help("Bring this work's files that live outside the library into its Works folder. Files already in the library stay put.")
                     }
                 }
                 .padding(.vertical, 2)
@@ -384,23 +209,30 @@ private struct PlaylistList: View {
                 .fixedSize()
                 .disabled(model.mode == .player || model.worksToAdd.isEmpty)
                 .help("Works in the library (on any Mac) that this show doesn't have yet.")
-                Button("Add work") { model.addWork() }
-                    .help("A work set up by hand: choose its files below.")
+                Button("New work") { model.addWork() }
+                    .help("A work set up by hand: choose its files on the screens below.")
                     .disabled(model.mode == .player)
                 Spacer()
                 if let progress = model.collecting { Text(progress).foregroundStyle(.secondary) }
-                Button("Collect show…") { model.collectShow() }
+                Button("Collect show") { model.collectShow() }
                     .disabled(model.collecting != nil || model.show.works.isEmpty)
-                    .help("Copy every work's files on this Mac into one folder, with a copy of the show that plays from it. Each Mac collects its own files.")
+                    .help("Bring every file this show uses from outside the library into Works/, so the library holds the whole show. Files already in the library stay put. (To copy the show somewhere else, use Export in the Show menu.)")
             }
         }
     }
 
-    /// e.g. "2 files · 60.0 s · once · shorter: black"
+    /// e.g. "2 of 3 screens · 60.0 s · once · shorter: black"
+    ///
+    /// [claude] Counted over the whole tableau (every Mac, each to its
+    /// designed count, as the preview lays it out), so a 2-screen work on a
+    /// triptych reads differently from a 3-screen one (Mat, 2026-10-22: "the
+    /// playlist doesn't reflect this difference"). It used to count every
+    /// stored file on this Mac, including screens beyond the tableau.
     private func summary(_ w: Int, _ work: Work) -> String {
-        let files = model.panels(of: w).compactMap(\.file).count
+        let tiles = PreviewLayout.rows(model.show, work: work).flatMap { $0 }
+        let used = tiles.filter { $0.panel.file != nil }.count
         let length = model.length(of: w)
-        var parts = ["\(files) file\(files == 1 ? "" : "s")"]
+        var parts = [tiles.count == used ? "\(used) screen\(used == 1 ? "" : "s")" : "\(used) of \(tiles.count) screens"]
         parts.append(length > 0 ? String(format: "%.1f s", length) : "no length yet")
         switch work.repeat {
         case .times(1): parts.append("once")
@@ -459,52 +291,23 @@ private struct SyncRow: View {
     }
 }
 
-/// [claude] This Mac's network mode (v3 § One app, three modes) and the
-/// clock's status. Until Stage 3, Conductor and Player run only the clock;
-/// playback still follows this Mac's own clock.
+/// [claude] This Mac's network mode (v3 § One app, three modes) and, for a
+/// player, the conductor's address. Its state is in the status line (step 1).
 private struct NetworkRow: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Picker("This Mac", selection: $model.mode) {
-                    ForEach(AppModel.Mode.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 320)
-                if model.mode == .player {
-                    TextField("Conductor's address", text: $model.conductorAddress)
-                        .frame(width: 180)
-                        .onSubmit { model.restartClock() }
-                }
+        HStack {
+            Picker("This Mac", selection: $model.mode) {
+                ForEach(AppModel.Mode.allCases) { Text($0.label).tag($0) }
             }
-            if !model.clockStatus.isEmpty {
-                Text(model.clockStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            .pickerStyle(.segmented)
+            .frame(width: 320)
+            if model.mode == .player {
+                TextField("Conductor's address (blank: find it)", text: $model.conductorAddress)
+                    .frame(width: 240)
+                    .onSubmit { model.restartClock() }
             }
-            // [claude] P3b: the playlist link, beside the clock.
-            if model.mode == .conductor {
-                Text(model.playerLines.isEmpty ? "Playlist link: no players connected." : "Players: " + model.playerLines.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if model.mode == .player {
-                Text(model.sharedLengths.map { "Playing the conductor's playlist: \($0.count) work\($0.count == 1 ? "" : "s")." }
-                     ?? (model.linkUp ? "Connected; waiting for the conductor's playlist…" : "Playlist link: connecting to the conductor…"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
-/// What stops playback (red) and what deserves a look (orange).
-private struct ProblemList: View {
-    let problems: (blocking: [String], warnings: [String])
-    let lastError: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(problems.blocking, id: \.self) { Text($0).foregroundStyle(.red) }
-            ForEach(problems.warnings, id: \.self) { Text($0).foregroundStyle(.orange) }
-            if let lastError { Text(lastError).foregroundStyle(.red) }
         }
     }
 }

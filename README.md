@@ -32,22 +32,22 @@ The app isn't notarised by Apple, so macOS blocks it the first time:
 
 ## Use
 
-tableauX has two modes, switched at the top of its window:
+The window is where you compose a show: its works, and each work's screens
+drawn as the tableau (click a screen to choose its video, or None to keep
+it black; Audio; **Fit**, whole picture with black bars if the shapes
+differ, or **Fill**, covering the display). The **Tableau** line sets how
+many displays each Mac has in the show, the same for every work. Two
+buttons at the top:
 
-- **Compose**: the window itself. Set up the library, the shows and each
-  display: **Choose…** a video (or leave it empty to keep it black), and
-  **Fit** (whole picture, black bars if the shapes differ) or **Fill**
-  (covers the display, crops the overflow). Each row shows the scale
-  factor: **2×** for an HD file on a 4K display is a clean doubling.
-  **Preview** plays the show in a window, every screen as a tile.
-- **Present**: the show full screen on the real displays. All displays go
+- **Preview** plays the show in a window, every screen as a tile.
+- **Present** plays it full screen on the real displays. All displays go
   black, then start together. **Space** pauses and resumes, **→ / ←**
-  change work, **Esc** returns to Compose.
+  change work, **Esc** comes back to the window.
 
 A show saves itself as you change it, once it has a name (New show…, or
 **Save…** for the automatic "All works" show). **Save As…** makes a copy
-under a new name. Tick **Open in Present mode** to have the show start by
-itself when the app opens (for unattended installations).
+under a new name. For an unattended installation, tick **Start presenting
+when tableauX opens** in the Show menu.
 
 If a display is connected, removed or rearranged during playback, the show
 stops and returns to setup.
@@ -84,7 +84,10 @@ tableauX/
   the network by itself, sends it a list of its works, and plays whichever
   show the conductor has open, switching when it switches. Arrange every
   Mac's screens from the conductor's setup window.
-- **Collect show…** makes a library of one show (`Works/` + `Shows/`) to
+- **Import work…** turns a folder of videos anywhere into a work, linked
+  where it is. **Collect show** later brings those files into `Works/`,
+  copying only what isn't in the library already. **Export show as a
+  library…** (Show menu) copies the show as a library of its own, to
   archive or hand on.
 - **Preview** (beside Play) plays the show in one window: every screen of
   every Mac as a tile, one row per Mac, from the files on this Mac. Use it

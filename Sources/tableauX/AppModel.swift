@@ -104,13 +104,10 @@ final class AppModel: ObservableObject {
 
     // MARK: Another Mac's screens, set from the conductor (v4 P4a) [claude]
 
-    /// Whose screens setup is showing: nil = this Mac's. Conductor only:
-    /// § Getting works in › Manual, "a player's screen is chosen from the
-    /// files that player reported, without visiting it".
-    @Published var editingMachine: String?
-
-    /// The other Macs in the show, in screen-numbering order.
-    var otherMachines: [Machine] { show.machines.filter { $0.name != machineName } }
+    // § Getting works in › Manual: "a player's screen is chosen from the
+    // files that player reported, without visiting it". Since interface
+    // step 1 every Mac's screens are on the tableau map at once, so there is
+    // no "whose screens" selection any more.
 
     /// Machine `m`'s panels for the selected work, one per display it has
     /// (as it last reported, or as saved).
@@ -522,15 +519,43 @@ final class AppModel: ObservableObject {
         }
         // [claude] P4d: only the unsaved all-works show gains works here; a
         // saved show is curated, and new folders wait in the library pool.
-        show.works = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: designDisplays, folders: inventory)],
+        let merged = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: designDisplays, folders: inventory)],
                                          firstScreens: [name: firstScreen], addingNewWorks: autoShow)
+        // [claude] Only assign when something changed: rescans run every few
+        // seconds, and every assignment would otherwise trigger an autosave.
+        if merged != show.works { show.works = merged }
         let inShow = Set(show.works.map(\.name))
-        leftOver = left.filter { inShow.contains($0.key) }
+        if left.filter({ inShow.contains($0.key) }) != leftOver { leftOver = left.filter { inShow.contains($0.key) } }
+        let before = Set(ownWorks)
         refreshLibrary()
-        lastError = nil
-        NSLog("scan: %d work(s) in %@", inventory.count, mediaFolder)
+        let added = Set(ownWorks).subtracting(before).subtracting(inShow)
+        if !before.isEmpty, !added.isEmpty {
+            libraryNote = "\(added.count) new work\(added.count == 1 ? "" : "s") in the library: \(added.sorted().joined(separator: ", ")). Add from library to use \(added.count == 1 ? "it" : "them")."
+        }
         fillNewDisplays()
         loadAllInfo()
+    }
+
+    /// [claude] Interface step 1: something the automatic rescan found, said
+    /// once in the status line ("2 new works in the library…").
+    @Published var libraryNote: String?
+
+    /// Re-reads the library without anyone pressing Scan (Mat: "when I've
+    /// hit the scan button it's not done anything"): when the app becomes
+    /// active and every 5 s. Not while playing: a show on screen isn't
+    /// edited underneath itself.
+    private func rescan() {
+        guard !isPlaying, mode != .player, !mediaFolder.isEmpty else { return }
+        scan()
+    }
+
+    /// Every video in this Mac's library, as a panel stores it
+    /// ("Work/file.mov"), for the tableau map's file menu.
+    var ownFiles: [String] {
+        guard let l = Self.listing(mediaFolder) else { return [] }
+        return l.subfolders.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.flatMap { folder in
+            FolderScan.videos(l.subfolders[folder] ?? []).map { "\(folder)/\($0)" }
+        }
     }
 
     /// [claude] Gives each work's unset displays its folder's unused videos
@@ -609,20 +634,82 @@ final class AppModel: ObservableObject {
 
     /// Copies this Mac's files for the whole show into a new folder named
     /// after the show, with the show file rewritten to point at the copies.
-    func collectShow() {
+    /// [claude] Export: a copy of the show as a library of its own (Works/ +
+    /// Shows/) somewhere else, to archive or hand on (Mat's 21 Oct request).
+    /// It was "Collect show" until Mat's review (2026-10-22); Collect now
+    /// gathers into THIS library instead (collectShow).
+    func exportShow() {
         let showName = showPath?.deletingPathExtension().lastPathComponent ?? "Untitled"
         guard let dir = chooseCollectFolder() else { return }
         let root = dir.appendingPathComponent(Collect.uniqueName(showName, taken: Self.namesIn(dir)))
-        // [claude] P4d: a library of one show: Works/ and Shows/ (§ Library).
         collect(Array(show.works.indices), into: root, worksIn: ShowFolder.worksName,
                 showFile: "\(ShowFolder.showsName)/\(showName).\(Self.showExtension)")
     }
 
-    /// Copies this Mac's files for one work into a folder named after it:
-    /// a folder that Import (or a scan) reads back as that work.
+    /// Collect the show: bring its files that live outside this library into
+    /// Works/ (Mat, 2026-10-22). Nothing already in the library is copied.
+    func collectShow() { gather(Array(show.works.indices)) }
+
+    /// The same for one work.
     func collectWork(_ w: Int) {
-        guard show.works.indices.contains(w), let dir = chooseCollectFolder() else { return }
-        collect([w], into: dir, showFile: nil)
+        guard show.works.indices.contains(w) else { return }
+        gather([w])
+    }
+
+    /// Plans with Collect.gather (pure), copies off the main thread, then
+    /// points the show's screens at the copies (and autosave keeps that).
+    private func gather(_ indices: [Int]) {
+        guard collecting == nil, let name = machineName, !mediaFolder.isEmpty else { return }
+        let works = indices.map { show.works[$0] }
+        let folders = Self.listing(mediaFolder)?.subfolders ?? [:]
+        let plan = Collect.gather(works: works, machine: name, worksFolder: mediaFolder,
+                                  folders: Set(folders.keys), listing: { folders[$0] ?? [] })
+        let copies = plan.copies.filter { fileExists($0.source) }
+        let missing = plan.copies.count - copies.count
+        guard !copies.isEmpty else {
+            libraryNote = missing > 0 ? "\(missing) linked file(s) can't be found, so nothing was collected."
+                                      : "Everything this \(indices.count == 1 ? "work" : "show") uses is already in the library."
+            return
+        }
+        let fm = FileManager.default
+        let bytes = copies.reduce(Int64(0)) { $0 + ((try? fm.attributesOfItem(atPath: $1.source)[.size] as? Int64) ?? 0) }
+        let root = URL(fileURLWithPath: mediaFolder)
+        let free = (try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage) ?? Int64.max
+        if bytes > free {
+            lastError = "Not enough space: collecting needs \(Self.gigabytes(bytes)), the library's disk has \(Self.gigabytes(free)) free."
+            return
+        }
+        collecting = "Collecting 0 of \(copies.count) files…"
+        NSLog("collect: %d file(s), %@ into the library", copies.count, Self.gigabytes(bytes))
+        Task.detached {
+            let fm = FileManager.default
+            var failure: String?
+            do {
+                for (n, c) in copies.enumerated() {
+                    let dest = root.appendingPathComponent(c.dest)
+                    try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try fm.copyItem(atPath: c.source, toPath: dest.path)
+                    await MainActor.run { self.collecting = "Collecting \(n + 1) of \(copies.count) files…" }
+                }
+            } catch {
+                failure = "Collecting stopped: \(error.localizedDescription). The show still uses the original files."
+            }
+            await MainActor.run { [failure] in
+                self.collecting = nil
+                if let failure { self.lastError = failure; return }
+                // Point the screens at the copies, by work name (the show
+                // may have been reordered while copying).
+                for w in plan.works {
+                    guard let i = self.show.works.firstIndex(where: { $0.name == w.name }) else { continue }
+                    self.show.works[i].screens[name] = w.screens[name]
+                }
+                self.libraryNote = "Collected \(copies.count) file(s) into the library" + (missing > 0 ? "; \(missing) couldn't be found." : ".")
+                NSLog("collect: done")
+                self.refreshLibrary()
+                self.loadAllInfo()
+            }
+        }
     }
 
     private func chooseCollectFolder() -> URL? {
@@ -749,6 +836,9 @@ final class AppModel: ObservableObject {
         clockReady = true
         restartClock()
         // [claude] Autosave: an edit made in the last second is written on quit.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rescan() }     // back from Finder: pick up what changed
+        }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.flushAutosave() }
         }
@@ -1046,7 +1136,7 @@ final class AppModel: ObservableObject {
     private func updateClockStatus() {
         statusTicks += 1
         server?.broadcast()          // the once-a-second repeat of the show state
-        if statusTicks % 5 == 0 { refreshInventory(); sendReport() }    // [claude] P3b, player only
+        if statusTicks % 5 == 0 { refreshInventory(); sendReport(); rescan() }    // [claude] player: inventory; others: the library
         if let server {
             let players = server.players()
             clockStatus = "Conductor: answering clock requests on \(server.addresses.joined(separator: ", "))"
@@ -1290,13 +1380,17 @@ final class AppModel: ObservableObject {
         // players for the disk; a collect is short and run by a person.
         if collecting != nil { blocking.append("Wait for the collect to finish.") }
         blocking += fileProblems()
-        for (w, work) in show.works.enumerated() {
+        for work in show.works {
             if let extra = leftOver[work.name] {
                 warnings.append("\(work.name): \(extra.count) file(s) not used on this Mac (more files than displays, or numbered for another screen): \(extra.joined(separator: ", ")).")
             }
-            if panels(of: w).count > displays.count, panels(of: w).dropFirst(displays.count).contains(where: { $0.file != nil }) {
-                warnings.append("\(work.name) has files for \(panels(of: w).count) displays but \(displays.count) are connected. The extra ones won't play.")
-            }
+        }
+        // [claude] Interface step 1: one note for the whole show (it was one
+        // per work), and only when some screen beyond the connected ones
+        // actually has a file.
+        if designDisplays > displays.count,
+           show.works.indices.contains(where: { panels(of: $0).dropFirst(displays.count).contains { $0.file != nil } }) {
+            warnings.append("This Mac has \(displays.count) of the \(designDisplays) displays this show is designed for: screens beyond \(displays.count) play in Preview, not when presenting here.")
         }
         if blocking.isEmpty, !show.works.indices.contains(where: { length(of: $0) > 0 }) {
             blocking.append("No work has a file for this Mac's displays.")

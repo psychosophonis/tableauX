@@ -351,6 +351,21 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   asked to name a show New show… had already saved). Not run by hand yet
   (needs edits in the window): to check, edit a named show, wait 2 s,
   switch shows and back.
+- 0.3.17 (2026-10-22): interface step 1: tableau map, status line,
+  automatic rescan (no Scan button), one note for "fewer displays than
+  designed". Builds and passes 144 tests. Looked at (with Mat's OK) on a
+  link to his works folder: map, status line and note as intended.
+- 0.3.18 (2026-10-22): from Mat's triptych show (a 3-screen and a 2-screen
+  work): the per-Mac display count moved out of the work's map into a
+  "Tableau" row (it is the show's, for every work); the playlist reads
+  "2 of 3 screens". Mat's TestNewShow had displays 2 with both works'
+  third screens kept: setting it back to 3 restores them.
+- 0.3.19 (2026-10-22): Mat's review. Preview / Present buttons (no
+  Compose switch); Collect gathers into this library, copying only files
+  outside Works/ (Collect.gather, 4 tests); the old copy-elsewhere is
+  "Export show as a library…" in the Show menu, with "Start presenting
+  when tableauX opens" and "Open a show from elsewhere…"; New work; Import
+  work…. 148 tests. Not looked at in a window yet.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

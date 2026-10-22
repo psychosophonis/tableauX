@@ -470,8 +470,16 @@ and works can move between shows.
   switching show and on quit. "Save As…" makes a copy under a new name.
   The unsaved all-works show is named once with "Save…"; leaving it after
   editing it by hand asks Save… / Don't Save / Cancel. Players never save.
-- **Collect show** makes a library of one show: `Works/` with that show's
-  works, `Shows/<show>.tableaux`.
+- **Collect gathers INTO this library (Mat's review, 2026-10-22: "check its
+  existing structure first so it's not duplicating files").** Only files
+  outside `Works/` (linked by Import or Choose) are copied, into the work's
+  folder in `Works/` (where its library files already are, or a new folder
+  named after the work, never another work's); the screens then point at
+  the copies; nothing is asked. Nothing to gather: it says so.
+- **Export show as a library…** (Show menu; Collect show before the
+  review) makes a copy of the show as a library of its own elsewhere:
+  `Works/` with that show's works, `Shows/<show>.tableaux`, for archiving
+  or handing on.
 - [claude] **Later, possible (Mat):** a show described by a plain text file
   in `Shows/` listing work names one per line, for shows assembled without
   the app. Not built: it would be a second description of a show to keep
@@ -481,17 +489,48 @@ and works can move between shows.
 - **Compose** is the setup window: library, shows, screens, settings.
   **Present** plays the show full screen on the real displays (Play); Esc
   returns to Compose. The words are Mat's.
-- [claude] The top bar holds the Show menu, **Preview** (the tableau in a
-  window, § Preview) and the switch **[Compose | Present]**. Present's
-  label says when fewer displays are connected than designed: "Present
-  (1 of 3 displays)". Return presents. On a player the switch is replaced
-  by "Presents when the conductor does".
-- [claude] "Open in Present mode" (the show's `playOnLaunch`, renamed) is
-  for gallery Macs: tableauX opens straight into Present with that show.
+- **No Compose switch (Mat's review: "I don't think we need Compose"):**
+  the window is where you compose; the top bar has the Show menu and two
+  buttons, **Preview** (the tableau in a window, § Preview) and
+  **Present**. [claude] Present's label says when fewer displays are
+  connected than designed: "Present (1 of 3 displays)". Return presents.
+  On a player: "Presents when the conductor does".
+- **In the Show menu, off the main window (Mat's review):** "Start
+  presenting when tableauX opens" (the show's `playOnLaunch`; for an
+  unattended gallery Mac), "Open a show from elsewhere…" (the old Open…),
+  "Export show as a library…". "Add work" is **New work**; "Import
+  folder…" is **Import work…** (a folder of videos becomes one work,
+  linked; a folder of folders, one work each).
 - [claude] The preview stays a separate window for now (Mat undecided:
   it can sit on a second display); docking it in Compose is possible later.
 - [claude] Nothing has keyboard focus when the setup window opens (it
   used to be the work's name field, which typing elsewhere could rename).
+- **Interface step 1 (Mat: "a good hard look at the accretion of
+  features"; agreed in steps):** [claude]
+  - **Tableau map:** the selected work's screens as a row per Mac (show
+    order) and a 16:9 tile per designed display, numbered across the
+    tableau, as the preview lays them out. Each row has the Mac's state and
+    its designed display count; each tile shows file, audio, Fit/Fill,
+    "not here", red when the file is missing or unreported. A tile opens an
+    editor: that Mac's files (this Mac's library; a player's report),
+    "Choose a file anywhere…" on this Mac, Audio, Fit/Fill, details.
+    Replaces the per-display rows and "Screens on".
+  - **Status line:** role and players · displays · the first blocking
+    problem in red (+N more) or a count of notes or "Ready"; click for the
+    list. Replaces the problem sentences and status captions.
+  - **No Scan button:** the library is re-read when the app comes to the
+    front and every 5 s (not while playing); new works are announced once
+    ("2 new works in the library…"). (Mat: Scan "hasn't done anything".)
+  - Import stays, linking in place (Mat: Collect is the way to gather).
+  - **The display count is the show's, for every work (fix from Mat's
+    triptych show, 0.3.18):** set in a "Tableau" row under the Show menu,
+    one stepper per Mac; a work with fewer screens leaves the rest black
+    (a tile set to None). It used to sit beside the selected work's
+    screens, read as that work's, and setting a 2-screen work to 2 hid
+    screen 3 of every work. The playlist line counts screens over the
+    whole tableau: "2 of 3 screens".
+  - Next steps (not built): works list beside the map, Settings window for
+    per-Mac things (role, address, library, sync), menus for rare actions.
 
 ### Preview (Mat, 2026-10-22)
 Aim (Mat): "test my shows on a single screen in a kind of virtual display."

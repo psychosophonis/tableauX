@@ -99,6 +99,54 @@ public enum Collect {
         return Plan(copies: copies, works: out)
     }
 
+    /// [claude] Collect INTO this library (Mat, 2026-10-22: "check its
+    /// existing structure first so it's not duplicating files, build from
+    /// what it has already"). Only files OUTSIDE the works folder (linked by
+    /// Import or Choose) are copied, each into its work's folder in Works/:
+    /// the folder the work's library files are already in, or else a new one
+    /// named after the work (never another work's folder). Files already in
+    /// the library are left exactly where they are. `dest` is relative to the
+    /// works folder; the returned works point at the copies.
+    ///
+    /// `folders` lists the works folder's subfolders (as they are now) and
+    /// `listing` a subfolder's files, so names already there are avoided.
+    public static func gather(works: [Work], machine: String, worksFolder: String,
+                              folders: Set<String>, listing: (String) -> [String]) -> Plan {
+        let root = worksFolder.hasSuffix("/") ? worksFolder : worksFolder + "/"
+        func inside(_ f: String) -> Bool { !f.hasPrefix("/") || f.hasPrefix(root) }
+        var copies: [Copy] = []
+        var out = works
+        var takenFolders = Set(folders.map { $0.lowercased() })
+        for (w, work) in works.enumerated() {
+            guard let panels = work.screens[machine], panels.contains(where: { $0.file.map { !inside($0) } ?? false }) else { continue }
+            // Beside the work's library files if it has any; else its own new folder.
+            let relativeParents = Set(panels.compactMap(\.file).filter { !$0.hasPrefix("/") }
+                .map { ($0 as NSString).deletingLastPathComponent }).filter { !$0.isEmpty }
+            let folder: String
+            if relativeParents.count == 1, let only = relativeParents.first {
+                folder = only
+            } else {
+                folder = uniqueName(folderName(work.name), taken: takenFolders)
+                takenFolders.insert(folder.lowercased())
+            }
+            var names = Set(listing(folder).map { $0.lowercased() })
+            var given: [String: String] = [:]
+            var rewritten = panels
+            for (i, p) in panels.enumerated() {
+                guard let f = p.file, !inside(f) else { continue }
+                if given[f] == nil {
+                    let name = uniqueName((f as NSString).lastPathComponent, taken: names)
+                    names.insert(name.lowercased())
+                    given[f] = name
+                    copies.append(Copy(source: f, dest: "\(folder)/\(name)"))
+                }
+                rewritten[i].file = "\(folder)/\(given[f]!)"
+            }
+            out[w].screens[machine] = rewritten
+        }
+        return Plan(copies: copies, works: out)
+    }
+
     /// `name`, or "name 2.ext", "name 3.ext", … if it's taken. `taken` holds
     /// LOWERCASED names, because a Mac's disk is normally case-insensitive:
     /// "Clip.mp4" and "clip.mp4" are the same file there, and copying the

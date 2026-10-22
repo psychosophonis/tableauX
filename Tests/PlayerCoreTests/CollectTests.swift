@@ -93,6 +93,40 @@ final class CollectTests: XCTestCase {
         XCTAssertEqual(p.copies.map(\.dest), ["Smith 2/1.mp4"])
     }
 
+    // Collect INTO the library (Mat, 2026-10-22).
+
+    private func gather(_ works: [Work], folders: [String: [String]]) -> Collect.Plan {
+        Collect.gather(works: works, machine: "M", worksFolder: "/L/Works", folders: Set(folders.keys),
+                       listing: { folders[$0] ?? [] })
+    }
+
+    func testFilesAlreadyInTheLibraryAreNotCopied() {
+        let w = Work(name: "Smith", screens: ["M": [panel("Smith/Smith_1.mov"), panel("/L/Works/Smith/Smith_2.mov")]])
+        let p = gather([w], folders: ["Smith": ["Smith_1.mov", "Smith_2.mov"]])
+        XCTAssertEqual(p.copies, [])
+        XCTAssertEqual(p.works, [w])
+    }
+
+    func testAnOutsideFileJoinsItsWorksFolderBesideTheOthers() {
+        let w = Work(name: "Smith", screens: ["M": [panel("Smith/Smith_1.mov"), panel("/Volumes/USB/new/Smith_2.mov"), panel(nil)]])
+        let p = gather([w], folders: ["Smith": ["Smith_1.mov"]])
+        XCTAssertEqual(p.copies, [.init(source: "/Volumes/USB/new/Smith_2.mov", dest: "Smith/Smith_2.mov")])
+        XCTAssertEqual(p.works[0].screens["M"]?.map(\.file), ["Smith/Smith_1.mov", "Smith/Smith_2.mov", nil])
+    }
+
+    /// A linked work gets its own folder, never another work's of the same name.
+    func testALinkedWorkGetsANewFolderAndNamesDontClash() {
+        let w = Work(name: "Smith", screens: ["M": [panel("/x/a.mov"), panel("/y/a.mov"), panel("/x/a.mov")]])
+        let p = gather([w], folders: ["Smith": ["old.mov"]])
+        XCTAssertEqual(p.copies.map(\.dest), ["Smith 2/a.mov", "Smith 2/a 2.mov"])
+        XCTAssertEqual(p.works[0].screens["M"]?.map(\.file), ["Smith 2/a.mov", "Smith 2/a 2.mov", "Smith 2/a.mov"])
+    }
+
+    func testOtherMacsArentGathered() {
+        let w = Work(name: "W", screens: ["B": [panel("/b/1.mov")]])
+        XCTAssertEqual(gather([w], folders: [:]).copies, [])
+    }
+
     func testUniqueNameWithoutExtension() {
         XCTAssertEqual(Collect.uniqueName("W", taken: ["w", "w 2"]), "W 3")
         XCTAssertEqual(Collect.folderName("  "), "Untitled")
