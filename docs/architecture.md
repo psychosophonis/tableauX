@@ -489,6 +489,16 @@ Aim (Mat): "test my shows on a single screen in a kind of virtual display."
   the preview checks order, timing and assignment, not performance.
 - [claude] `--preview` on the command line opens it at launch (for checks
   without a person).
+- **A Mac's `displays` in the show is the DESIGNED count (Mat, 2026-10-22:
+  "preview as if they were connected").** [claude] Set from the connected
+  (or reported) count when a Mac is first added; afterwards it only grows
+  by itself (a display plugged in, a player reporting more) and never
+  shrinks; "Displays in this show" sets it by hand (this Mac: from its
+  connected count up to 16; another Mac on the conductor: 1–16). Setup
+  lists every designed display ("not connected here" where so); scan,
+  "_N", work lengths and the preview use the design; a real show plays on
+  the displays actually connected. (Before 0.3.13 the connected count
+  overwrote the design, so a laptop shrank a 3-display show to 1.)
 
 ### Zero setup (Mat, 2026-10-22)
 Aim (Mat): "minimise any step that requires going back to a client… send a

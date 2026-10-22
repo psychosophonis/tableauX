@@ -88,6 +88,20 @@ final class SharedShowTests: XCTestCase {
         XCTAssertEqual(all.works.map(\.name), ["Smith", "Lee"])                         // the all-works show grows
     }
 
+    /// Mat (2026-10-22): a Mac reporting fewer displays than the show was
+    /// designed for keeps the design's count and screens, so it can be
+    /// previewed "as if"; reporting more grows it.
+    func testADisplayCountIsTheDesignAndNeverShrinksByItself() {
+        var s = Show(machines: [Machine(name: "A", displays: 1)],
+                     works: [Work(name: "W", screens: ["B": [PanelConfig(file: "W/1.mp4"), PanelConfig(file: "W/2.mp4"), PanelConfig(file: "W/3.mp4")]])])
+        s.machines.append(Machine(name: "B", displays: 3))
+        let fewer = SharedShow.merge(s, with: inv("B", 1, ["W": [("1.mp4", 5), ("2.mp4", 5), ("3.mp4", 5)]]), conductor: "A")
+        XCTAssertEqual(fewer.machines[1].displays, 3)
+        XCTAssertEqual(fewer.works[0].screens["B"]?.count, 3)
+        let more = SharedShow.merge(s, with: inv("B", 4, [:]), conductor: "A")
+        XCTAssertEqual(more.machines[1].displays, 4)
+    }
+
     func testHandSetScreensAreKeptAndNewDisplaysFill() {
         let set = [PanelConfig(file: "Smith/3.mp4", audio: true)]
         var s = Show(machines: [Machine(name: "A")], works: [Work(name: "Smith", screens: ["B": set])])

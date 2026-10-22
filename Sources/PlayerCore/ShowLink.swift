@@ -109,20 +109,30 @@ public enum SharedShow {
                 if let panels = s.works[w].screens.removeValue(forKey: lone) { s.works[w].screens[conductor] = panels }
             }
         }
+        // [claude] A Mac's display count is the show's DESIGN (Mat,
+        // 2026-10-22: "preview as if they were connected"): set from the
+        // report when the Mac is first added, grown if it reports more,
+        // never shrunk by a report of fewer (a display unplugged, a laptop
+        // standing in). Only a person makes it smaller.
+        let designed: Int
         if let i = s.machines.firstIndex(where: { $0.name == inventory.machine }) {
-            s.machines[i].displays = inventory.displays
+            s.machines[i].displays = max(s.machines[i].displays, inventory.displays)
+            designed = s.machines[i].displays
         } else {
             s.machines.append(Machine(name: inventory.machine, displays: inventory.displays))
+            designed = inventory.displays
         }
+        var asDesigned = inventory
+        asDesigned.displays = designed
         // The machine is in the show now, so its place in the tableau is known.
         let first = firstScreen(s, of: inventory.machine)
-        s.works = PlaylistMerge.merge(s.works, with: [inventory], firstScreens: [inventory.machine: first],
+        s.works = PlaylistMerge.merge(s.works, with: [asDesigned], firstScreens: [inventory.machine: first],
                                       addingNewWorks: addingNewWorks)
         for w in s.works.indices {
             let set = s.works[w].screens[inventory.machine] ?? []
             guard let folder = FolderScan.folder(of: set, work: s.works[w].name),
                   let files = inventory.folders[folder] else { continue }
-            let (panels, _) = FolderScan.fill(set, folder: folder, files: files.map(\.name), displays: inventory.displays,
+            let (panels, _) = FolderScan.fill(set, folder: folder, files: files.map(\.name), displays: designed,
                                               firstScreen: first)
             if panels != set { s.works[w].screens[inventory.machine] = panels }
         }

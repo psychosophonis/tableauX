@@ -46,9 +46,19 @@ struct SetupView: View {
                 if model.mode == .conductor, let m = model.editingMachine, model.otherMachines.contains(where: { $0.name == m }) {
                     RemoteScreens(model: model, machine: m)
                 } else {
-                    ForEach(Array(model.displays.enumerated()), id: \.element.id) { i, display in
+                    // [claude] Every display the show is DESIGNED for (Mat,
+                    // 2026-10-22), connected here or not, so a laptop can
+                    // set up and preview a 3-display Mac's part.
+                    if model.mode != .player, let me = model.machineName {
+                        Stepper("Displays in this show: \(model.designDisplays)",
+                                value: Binding(get: { model.designDisplays }, set: { model.setDisplays(me, $0) }),
+                                in: max(model.displays.count, 1)...16)
+                            .help("How many displays this Mac has in the show's design. Displays not connected here can still be set up and previewed; a show plays on those that are connected.")
+                    }
+                    ForEach(0 ..< model.designDisplays, id: \.self) { i in
                         if i < model.panels.count {
-                            PanelRow(number: i + 1, display: display, panel: model.panelBinding(i), model: model)
+                            PanelRow(number: i + 1, display: i < model.displays.count ? model.displays[i] : nil,
+                                     panel: model.panelBinding(i), model: model)
                                 .disabled(model.mode == .player)
                             Divider()
                         }
@@ -83,14 +93,16 @@ struct SetupView: View {
 /// One display and the panel that plays on it.
 private struct PanelRow: View {
     let number: Int
-    let display: DisplayInfo
+    let display: DisplayInfo?           // [claude] nil: in the design, not connected here
     @Binding var panel: PanelConfig
     @ObservedObject var model: AppModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Display \(number): \(display.name)  ·  \(size(display.pixelSize))")
+            Text(display.map { "Display \(number): \($0.name)  ·  \(size($0.pixelSize))" }
+                 ?? "Display \(number) (not connected here)")
                 .font(.headline)
+                .foregroundStyle(display == nil ? .secondary : .primary)
             HStack {
                 fileLabel
                 Spacer()
@@ -134,8 +146,10 @@ private struct PanelRow: View {
     /// every source pixel maps to a clean block of screen pixels; anything else
     /// means the image is interpolated, which is worth knowing before a show.
     private func details(_ info: MediaInfo) -> String {
-        let scale = Placement.scale(video: info.size, display: display.pixelSize, scaling: panel.scaling)
-        var parts = [size(info.size), String(format: "%.1f s", info.duration), "\(factor(scale)) on this display"]
+        var parts = [size(info.size), String(format: "%.1f s", info.duration)]
+        if let display {                // the scale factor needs a real display to measure against
+            parts.append("\(factor(Placement.scale(video: info.size, display: display.pixelSize, scaling: panel.scaling))) on this display")
+        }
         if !info.hasAudio { parts.append("no audio track") }
         return parts.joined(separator: "  ·  ")
     }
@@ -166,6 +180,10 @@ private struct RemoteScreens: View {
                 Text("\(machine) isn't connected: its files are as it last reported them. Changes reach it when it reconnects.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            // [claude] The design's count for that Mac (never shrunk by a report).
+            let count = model.show.machines.first(where: { $0.name == machine })?.displays ?? 0
+            Stepper("Displays in this show: \(count)",
+                    value: Binding(get: { count }, set: { model.setDisplays(machine, $0) }), in: 1...16)
             let panels = model.panels(on: machine)
             if panels.isEmpty { Text("\(machine) has reported no displays yet.").foregroundStyle(.secondary) }
             ForEach(panels.indices, id: \.self) { i in

@@ -331,6 +331,11 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   (Play on launch, test kit) played full screen through the new surface
   code, "1 Red starts on time". Not run: → / ← and the close button in the
   preview by hand.
+- 0.3.13 (2026-10-22): fix from Mat: the connected display count no longer
+  overwrites the show's designed count. Run on this Mac with 1 display
+  connected and the 3-display test show: setup kept "Displays in this
+  show: 3" with displays 2–3 "not connected here", and the preview played
+  3 tiles in step. 1 new test (a report of fewer displays keeps the design).
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

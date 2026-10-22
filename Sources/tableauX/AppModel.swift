@@ -73,7 +73,7 @@ final class AppModel: ObservableObject {
     func panels(of w: Int) -> [PanelConfig] {
         guard show.works.indices.contains(w), let name = machineName else { return [] }
         var ps = show.works[w].screens[name] ?? []
-        while ps.count < displays.count { ps.append(PanelConfig()) }
+        while ps.count < designDisplays { ps.append(PanelConfig()) }      // [claude] the design, not just what's connected
         return ps
     }
 
@@ -158,7 +158,7 @@ final class AppModel: ObservableObject {
 
     /// One play of work `w` on this Mac's own files: its longest file here.
     func ownLength(of w: Int) -> Double {
-        panels(of: w).prefix(displays.count).compactMap { $0.file.flatMap { media[resolve($0)]?.duration } }.max() ?? 0
+        panels(of: w).prefix(designDisplays).compactMap { $0.file.flatMap { media[resolve($0)]?.duration } }.max() ?? 0
     }
 
     /// One play of work `w` (§ v4 › Playing): its longest file on ANY Mac.
@@ -445,12 +445,12 @@ final class AppModel: ObservableObject {
             guard !videos.isEmpty else { continue }
             // Durations aren't known yet; the merge only needs the names.
             inventory[folder] = videos.map { InventoryFile(name: $0, duration: 0) }
-            let extra = FolderScan.assign(folder: folder, files: videos, displays: displays.count, firstScreen: firstScreen).leftOver
+            let extra = FolderScan.assign(folder: folder, files: videos, displays: designDisplays, firstScreen: firstScreen).leftOver
             if !extra.isEmpty { left[folder] = extra }
         }
         // [claude] P4d: only the unsaved all-works show gains works here; a
         // saved show is curated, and new folders wait in the library pool.
-        show.works = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: displays.count, folders: inventory)],
+        show.works = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: designDisplays, folders: inventory)],
                                          firstScreens: [name: firstScreen], addingNewWorks: autoShow)
         let inShow = Set(show.works.map(\.name))
         leftOver = left.filter { inShow.contains($0.key) }
@@ -477,7 +477,7 @@ final class AppModel: ObservableObject {
             guard let folder = FolderScan.folder(of: set, work: show.works[w].name),
                   folder.hasPrefix("/") || !mediaFolder.isEmpty,
                   let files = try? FileManager.default.contentsOfDirectory(atPath: resolve(folder)) else { continue }
-            let (panels, left) = FolderScan.fill(set, folder: folder, files: files, displays: displays.count, firstScreen: firstScreen)
+            let (panels, left) = FolderScan.fill(set, folder: folder, files: files, displays: designDisplays, firstScreen: firstScreen)
             if panels != set {
                 show.works[w].screens[name] = panels
                 NSLog("fill: %@ now on %d display(s)", show.works[w].name, panels.count)
@@ -523,7 +523,7 @@ final class AppModel: ObservableObject {
             }
         }
         let r = FolderImport.works(root: url.path, rootFiles: files, subfolders: subfolders, machine: name,
-                                   displays: displays.count, existing: Set(show.works.map(\.name)), firstScreen: firstScreen)
+                                   displays: designDisplays, existing: Set(show.works.map(\.name)), firstScreen: firstScreen)
         show.works += r.works
         leftOver.merge(r.leftOver) { $1 }
         if !r.works.isEmpty { selectedWork = show.works.count - r.works.count }
@@ -1042,9 +1042,29 @@ final class AppModel: ObservableObject {
         // Model). Panels are padded per work when read (`panels(of:)`), and
         // extra panels from a bigger array are kept, so saving on this
         // machine doesn't lose them. New displays take unused files.
+        //
+        // [claude] The count in the show is the DESIGN (Mat, 2026-10-22):
+        // it grows when more displays are connected, never shrinks when
+        // fewer are (a laptop standing in for the gallery Mac). Only
+        // setDisplays (a person) makes it smaller.
+        if let mi = machineIndex, show.machines[mi].displays < displays.count {
+            show.machines[mi].displays = displays.count
+        }
         fillNewDisplays()
-        guard let mi = machineIndex, show.machines[mi].displays != displays.count else { return }
-        show.machines[mi].displays = displays.count
+    }
+
+    /// This Mac's displays as the show is designed: what setup lists, what
+    /// a scan assigns and what the preview shows. A real show plays on as
+    /// many of them as are connected.
+    var designDisplays: Int { max(machineIndex.map { show.machines[$0].displays } ?? 0, displays.count) }
+
+    /// "Displays in this show" for Mac `m`, set by hand (1–16). Shrinking
+    /// keeps the panels beyond the count, unused, so growing again restores
+    /// them.
+    func setDisplays(_ m: String, _ n: Int) {
+        guard let i = show.machines.firstIndex(where: { $0.name == m }) else { return }
+        show.machines[i].displays = min(max(n, 1), 16)
+        if m == machineName { fillNewDisplays() }
     }
 
     private func screensChanged() {
