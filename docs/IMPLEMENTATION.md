@@ -404,6 +404,17 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   this Mac during the run (load spikes, max 0.48 s, are those). Still to
   do: the same on the Mac mini (T18), and whether steady playback without
   swaps grows at all.
+- **Three-Mac run (Mat, reported 2026-10-22):** M4 (2 screens), M5 (1) and
+  Intel (2), five screens in one show: "perfect sync", by eye. First run
+  across more than two real Macs, and the first with an Intel player.
+  Not recorded: the build on each Mac, Wi-Fi or wired, how long it ran,
+  and no photo frame counts, so this is a pass by eye, not a measured
+  offset (T6 still wants the photo method in LAB-TEST.md).
+
+### Release 0.3.25 (2026-10-22)
+Pushed with everything since 0.1.1 and published as v0.3.25: the app,
+the test show and the sweep clips. README gained "Running one playlist on
+a triptych" for the uni technician.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen
