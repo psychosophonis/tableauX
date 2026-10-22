@@ -1,19 +1,24 @@
 # tableauX
 
-A macOS app that plays one video per display, in sync, at each display's own
-resolution. Built for gallery and lab screen arrays (first use: the BCM116 lab,
-a Mac mini driving three 4K displays), where the usual trick of stretching one
-huge video across a virtual display resamples the picture and leaves artefacts.
+tableauX plays multiscreen video works across any number of displays. A work
+can use the displays on one Mac, or the displays on several Macs, each with
+several displays of its own, kept in sync over the network. So a work can be
+as large as you have screens for: n displays, on as many Macs as it takes.
+Each display plays its own video file, full screen at its native resolution.
 
-- One video per display, numbered left to right from macOS's display
-  arrangement.
-- Sync: every display's player follows the Mac's own clock and starts at the
-  same scheduled instant; a check once a second pulls back any display that
-  drifts more than a frame.
-- Seamless looping, Fit or Fill per display, audio on/off per display.
-- Shows save to `.tableaux` files and can play automatically when the app
-  opens. (Shows saved as `.msshow` by the earlier "Multiscreen Player" builds
-  still open.)
+What it does:
+
+- **Plays many displays as one work.** A triptych is three files, one per
+  display; a twelve-screen wall is twelve. They start together and stay in
+  step.
+- **Plays a playlist of pieces.** Each piece plays, the screens go black for a
+  moment, the next piece starts, and after the last it loops back to the
+  first.
+- **Runs across several Macs.** One Mac conducts; the others follow it and
+  play their own copies of the files. Tried so far: three Macs, five screens.
+- **Runs unattended.** It can start the show by itself when the Mac turns on.
+
+It's a Mac app (macOS 13 or later, Apple silicon or Intel).
 
 ## Download
 
