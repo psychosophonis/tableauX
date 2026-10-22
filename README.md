@@ -80,9 +80,13 @@ tableauX/
   Mac's screens from the conductor's setup window.
 - **Collect show…** makes a library of one show (`Works/` + `Shows/`) to
   archive or hand on.
+- **Preview** (beside Play) plays the show in one window: every screen of
+  every Mac as a tile, one row per Mac, from the files on this Mac. Use it
+  to check order, timing and which file is on which screen; Esc closes it.
 
 A folder of works without `Works/` (works directly inside, any show file
-beside them) also works, as a library of its own.
+beside them) also works, as a library of its own. If tableauX finds no
+library at all, it makes one in **Movies → tableauX** and tells you.
 
 Each Mac still asks twice the first time: **Open Anyway** (see First launch)
 and **Allow** when macOS asks about finding devices on the local network.

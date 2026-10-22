@@ -269,6 +269,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var showFiles: [String] = []
     /// This Mac's work folders (with videos), for the pool.
     @Published private(set) var ownWorks: [String] = []
+    /// True when this launch created the library (none existed): setup says
+    /// where, so the person knows where to put works.
+    @Published private(set) var libraryCreated = false
+
+    func revealLibrary() {
+        guard !libraryFolder.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: mediaFolder)])
+    }
+
     /// True for the unsaved all-works show made when a library has no show:
     /// only that show grows by itself when works appear (Scan, a player's
     /// report). A saved show is curated and changes only by hand.
@@ -355,9 +364,25 @@ final class AppModel: ObservableObject {
     private func findEverything() {
         let chosen = UserDefaults.standard.string(forKey: mediaKey)
         let app = Self.appFolder
-        let root = ShowFolder.pick(chosen: chosen, appFolder: app, home: NSHomeDirectory(), listing: Self.listing) ?? ""
+        var root = ShowFolder.pick(chosen: chosen, appFolder: app, home: NSHomeDirectory(), listing: Self.listing) ?? ""
+        // [claude] No library anywhere (a fresh Mac): make one, in Movies
+        // (Mat, 2026-10-22), so there is somewhere obvious to put works.
+        if root.isEmpty {
+            let made = ShowFolder.defaultLibrary(home: NSHomeDirectory())
+            do {
+                for sub in [ShowFolder.worksName, ShowFolder.showsName] {
+                    try FileManager.default.createDirectory(atPath: (made as NSString).appendingPathComponent(sub),
+                                                            withIntermediateDirectories: true)
+                }
+                root = made
+                libraryCreated = true
+            } catch {
+                NSLog("folder: couldn't create %@: %@", made, "\(error)")
+            }
+        }
         useLibrary(root)
         mediaSource = root.isEmpty ? ""
+            : libraryCreated ? "created by tableauX"
             : root == chosen ? "chosen by hand"
             : root == app ? "the folder tableauX is in"
             : "found by name"
@@ -378,9 +403,13 @@ final class AppModel: ObservableObject {
         if d.bool(forKey: modeByHandKey), let saved = d.string(forKey: modeKey).flatMap(Mode.init) {
             mode = saved
         } else {
-            // The folder decides (Mat): a show file in it = Conductor; works
-            // but no show = Player; no folder at all = Standalone.
-            mode = !shows.isEmpty ? .conductor : mediaFolder.isEmpty ? .standalone : .player
+            // The folder decides (Mat): show files = Conductor; works but no
+            // show = Player; an empty library or none = Standalone.
+            switch ShowFolder.role(shows: shows.count, works: ownWorks.count) {
+            case .conductor: mode = .conductor
+            case .player: mode = .player
+            case .standalone: mode = .standalone
+            }
             NSLog("folder: role %@, from the folder", mode.rawValue)
         }
         // No show opened (a fresh library): the all-works show, unsaved, so
@@ -992,6 +1021,12 @@ final class AppModel: ObservableObject {
     func launched() {
         guard !hasLaunched else { return }
         hasLaunched = true
+        // [claude] P4e: `--preview` on the command line opens the preview at
+        // launch, so it can be checked without a person clicking.
+        if CommandLine.arguments.contains("--preview") {
+            Task { await infoLoaded(); preview() }
+            return
+        }
         guard show.playOnLaunch else { return }
         Task {
             await infoLoaded()
@@ -1135,7 +1170,12 @@ final class AppModel: ObservableObject {
             let names = show.machines.map(\.name).joined(separator: ", ")
             return (["This show has parts for \(names), but not for this Mac (\(Self.thisMac))."], [])
         }
-        if show.works.isEmpty { return (["Choose a media folder and Scan, or add a work."], []) }
+        if show.works.isEmpty {
+            // [claude] P4d: say which of the two empties it is.
+            return ([libraryWorks.isEmpty
+                     ? "The library has no works yet: put each work in a folder inside \(ShowFolder.worksName), then press Scan."
+                     : "This show has no works: use Add from library."], [])
+        }
         // [claude] Copying gigabytes while playing would compete with the
         // players for the disk; a collect is short and run by a person.
         if collecting != nil { blocking.append("Wait for the collect to finish.") }
@@ -1335,6 +1375,66 @@ final class AppModel: ObservableObject {
 
     func stop() { playback?.stop() }
 
+    // MARK: Preview (v4 P4e) [claude]
+
+    /// True while a preview (not a show) is playing.
+    @Published private(set) var previewing = false
+
+    /// Every screen of the tableau, the file it would play resolved against
+    /// THIS Mac's library, or nil if that file isn't here.
+    private func previewPanels(_ work: Work) -> [PanelConfig] {
+        PreviewLayout.rows(show, work: work).flatMap { $0 }.map { t in
+            var p = t.panel
+            p.file = p.file.map(resolve).flatMap { fileExists($0) && !unreadable.contains($0) ? $0 : nil }
+            return p
+        }
+    }
+
+    /// Plays the show in one window, the whole tableau as tiles, a row per
+    /// Mac (Mat, 2026-10-22: "test my shows on a single screen"). The same
+    /// engine and timeline as a real show, on this Mac's own clock; nothing
+    /// is sent to players.
+    func preview() {
+        guard !isPlaying, !show.works.isEmpty else { return }
+        // The other Macs' files are only measured when previewing.
+        for w in show.works { previewPanels(w).compactMap(\.file).forEach(loadInfo) }
+        Task {
+            await infoLoaded()
+            startPreview()
+        }
+    }
+
+    private func startPreview() {
+        guard !isPlaying else { return }
+        let parts = show.works.enumerated().map { w, work -> WorkPart in
+            let ps = previewPanels(work)
+            let durations = Dictionary(ps.compactMap { p in p.file.flatMap { f in media[f].map { (f, $0.duration) } } },
+                                       uniquingKeysWith: { a, _ in a })
+            // The show's own length where known (the conductor's, across
+            // Macs), or the longest file here if that is longer.
+            return WorkPart(name: work.name, panels: ps, durations: durations,
+                            length: max(length(of: w), durations.values.max() ?? 0),
+                            repeat: work.repeat, shorter: work.shorter)
+        }
+        guard parts.contains(where: { $0.length > 0 }) else {
+            lastError = "Nothing to preview: none of this show's files are on this Mac."
+            return
+        }
+        let labels = PreviewLayout.rows(show, work: show.works[0]).map { row in
+            row.map { "\($0.machine) · display \($0.display) · screen \($0.screen)" }
+        }
+        lastError = nil
+        let pb = Playback(screens: [], works: parts, playlist: show.playlist, sync: show.sync, clock: .local,
+                          allowSkip: true, onStateChange: { _ in },     // leads, but tells nobody
+                          onWindowsUp: {}, onEnd: { [weak self] in self?.playbackEnded() },
+                          preview: labels)
+        playback = pb
+        isPlaying = true
+        previewing = true
+        NSLog("preview: %d work(s), %d screen(s)", parts.count, labels.joined().count)
+        pb.start()
+    }
+
     static let setupTitle = "tableauX"
     private var setupWindows: [NSWindow] {
         NSApp.windows.filter { !($0 is PanelWindow) && $0.title == Self.setupTitle }
@@ -1344,7 +1444,10 @@ final class AppModel: ObservableObject {
         if let failure = playback?.failure { lastError = failure; NSLog("%@", failure) }
         playback = nil
         isPlaying = false
+        let wasPreview = previewing
+        previewing = false
         setupWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+        if wasPreview { return }            // [claude] P4e: a preview told nobody it started
         // [claude] The conductor's Esc ends the show everywhere.
         if mode == .conductor { server?.publish(ShowState(version: hostNanos(), phase: .stopped)) }
         // A player stopped by a person (not by the conductor) stays out of this state.

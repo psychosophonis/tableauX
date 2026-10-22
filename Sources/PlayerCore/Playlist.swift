@@ -174,6 +174,35 @@ public enum FolderScan {
     }
 }
 
+// MARK: - Preview (§ v4 › Preview) [claude]
+
+/// The whole tableau laid out for one screen (Mat, 2026-10-22): a row per Mac
+/// in the show's order, a tile per display. Pure: which file each tile plays
+/// is decided here; the app checks which files it actually has.
+public struct PreviewTile: Equatable {
+    public var machine: String
+    public var display: Int          // 1-based, on that Mac
+    public var screen: Int           // 1-based, across the tableau
+    public var panel: PanelConfig    // that screen's panel for the work (file as stored)
+}
+
+public enum PreviewLayout {
+    /// The rows of tiles for work `work`. Every Mac contributes as many
+    /// tiles as it has displays, so the shape is the tableau's even where a
+    /// screen is black.
+    public static func rows(_ show: Show, work: Work) -> [[PreviewTile]] {
+        var screen = 0
+        return show.machines.map { m in
+            let panels = work.screens[m.name] ?? []
+            return (0 ..< max(m.displays, 0)).map { d in
+                screen += 1
+                return PreviewTile(machine: m.name, display: d + 1, screen: screen,
+                                   panel: d < panels.count ? panels[d] : PanelConfig())
+            }
+        }
+    }
+}
+
 // MARK: - Inventory and merge (§ v4 › Media on several Macs; T14)
 
 /// One file as a Mac's scan found it.

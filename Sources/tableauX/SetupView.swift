@@ -16,6 +16,11 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 12) {
             ShowRow(model: model)
             MediaRow(model: model)
+            // [claude] A fresh Mac: say what was made and what to do next.
+            if model.libraryCreated, model.ownWorks.isEmpty {
+                Text("tableauX made a library for you in Movies → \(ShowFolder.name). Put each work in a folder inside \(ShowFolder.worksName) (Show in Finder), then press Scan.")
+                    .foregroundStyle(.secondary)
+            }
             PlaylistList(model: model)
             Divider()
             if model.displays.isEmpty {
@@ -58,6 +63,10 @@ struct SetupView: View {
                 Button("Save…") { model.saveDialog() }.keyboardShortcut("s")
                 Toggle("Play on launch", isOn: $model.show.playOnLaunch)
                 Spacer()
+                // [claude] P4e: the whole tableau in one window, from this Mac's files.
+                Button("Preview") { model.preview() }
+                    .disabled(model.isPlaying || model.show.works.isEmpty)
+                    .help("Play the show in one window: every screen of every Mac as a tile, a row per Mac, from the files on this Mac. For checking order, timing and assignment; a laptop may not decode a whole tableau smoothly.")
                 Button("Play") { model.play() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(model.isPlaying || !model.problems.blocking.isEmpty)
@@ -250,6 +259,8 @@ private struct MediaRow: View {
                 .lineLimit(1).truncationMode(.head)
                 .help(model.libraryFolder.isEmpty ? "" : "\(model.libraryFolder): \(model.mediaSource). Works: \(model.mediaFolder)")
             Spacer()
+            Button("Show in Finder") { model.revealLibrary() }.disabled(model.libraryFolder.isEmpty)
+                .help("Open the library's Works folder: one folder per work goes in here.")
             Button("Choose…") { model.chooseMediaFolder() }
             Button("Scan") { model.scan() }.disabled(model.mediaFolder.isEmpty)
                 .help("Re-read the library's works. Files go on screens by their _N number, else in name order. Only the unsaved all-works show gains new works; add them to a saved show with Add from library.")

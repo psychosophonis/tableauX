@@ -24,6 +24,22 @@ public enum ShowFolder {
                                           || $0.caseInsensitiveCompare(showsName) == .orderedSame }
     }
 
+    /// [claude] Where a library is created when the search finds none (Mat,
+    /// 2026-10-22): ~/Movies/tableauX. The same place on every Mac, and one
+    /// macOS doesn't ask permission for.
+    public static func defaultLibrary(home: String) -> String {
+        ((home as NSString).appendingPathComponent("Movies") as NSString).appendingPathComponent(name)
+    }
+
+    public enum Role: Equatable { case conductor, player, standalone }
+
+    /// The role a library gives a Mac, unless one was chosen by hand (Mat:
+    /// the folder decides). Show files = Conductor; works but no shows =
+    /// Player; an empty library (a fresh Mac) = Standalone.
+    public static func role(shows: Int, works: Int) -> Role {
+        shows > 0 ? .conductor : works > 0 ? .player : .standalone
+    }
+
     // MARK: The library (P4d, § v4 › Library: works and shows) [claude]
 
     public static let worksName = "Works"

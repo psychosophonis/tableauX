@@ -10,9 +10,79 @@ import PlayerCore
 /// knowing about playback, so the window stays a dumb surface.
 final class PanelWindow: NSWindow {
     var onKey: ((NSEvent) -> Void)?
+    /// [claude] P4e: the preview window has a close button; closing it ends
+    /// the preview the same way Esc does.
+    var onClose: (() -> Void)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
     override func keyDown(with event: NSEvent) { onKey?(event) }
+    override func close() {
+        let f = onClose
+        onClose = nil               // once: stop() closes this window too
+        f?()
+        super.close()
+    }
+}
+
+/// [claude] P4e: the preview window's content (§ v4 › Preview): the whole
+/// tableau on one screen, a row per Mac, a 16:9 tile per display, each
+/// labelled. The tiles are the SURFACES the players draw into, as a
+/// display's window is during a real show.
+final class PreviewView: NSView {
+    let rows: [[String]]                 // tile labels, row per Mac
+    private(set) var tiles: [CALayer] = []
+    private var labels: [CATextLayer] = []
+
+    init(rows: [[String]]) {
+        self.rows = rows
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(white: 0.15, alpha: 1).cgColor
+        for row in rows {
+            for text in row {
+                let tile = CALayer()
+                tile.backgroundColor = NSColor.black.cgColor
+                let label = CATextLayer()
+                label.string = text
+                label.fontSize = 11
+                label.foregroundColor = NSColor(white: 1, alpha: 0.75).cgColor
+                label.backgroundColor = NSColor(white: 0, alpha: 0.45).cgColor
+                label.alignmentMode = .center
+                label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+                label.zPosition = 1          // above the video, which is added later
+                tile.addSublayer(label)
+                layer?.addSublayer(tile)
+                tiles.append(tile)
+                labels.append(label)
+            }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Fit the rows to the window: tiles as large as the window allows, all
+    /// 16:9, each row centred. Recomputed whenever the window is resized.
+    override func layout() {
+        super.layout()
+        let gap: CGFloat = 8
+        let n = CGFloat(max(rows.count, 1)), cols = CGFloat(max(rows.map(\.count).max() ?? 1, 1))
+        let tileW = max(1, min((bounds.width - gap * (cols + 1)) / cols, (bounds.height - gap * (n + 1)) / n * 16 / 9))
+        let tileH = tileW * 9 / 16
+        let top = (bounds.height + n * tileH + (n - 1) * gap) / 2
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)         // no animated jumps while resizing
+        var k = 0
+        for (r, row) in rows.enumerated() {
+            let rowW = CGFloat(row.count) * tileW + CGFloat(max(row.count - 1, 0)) * gap
+            let y = top - CGFloat(r + 1) * tileH - CGFloat(r) * gap
+            for c in row.indices {
+                tiles[k].frame = CGRect(x: (bounds.width - rowW) / 2 + CGFloat(c) * (tileW + gap), y: y, width: tileW, height: tileH)
+                labels[k].frame = CGRect(x: 0, y: 0, width: tileW, height: 16)
+                k += 1
+            }
+        }
+        CATransaction.commit()
+    }
 }
 
 /// [claude] One work's part on this Mac, ready to play (§ v4 › Model): its
@@ -129,6 +199,12 @@ final class Playback {
     // built. A stop during loading (Esc, a failed file, a display change)
     // used to leave black windows covering the screens.
     private var windows: [PanelWindow] = []
+    /// [claude] P4e: where each screen draws, in screen order: a display's
+    /// window (a real show) or a tile of the preview window. Players attach
+    /// to a surface, so the engine doesn't care which.
+    private var surfaces: [(window: PanelWindow, host: CALayer)] = []
+    /// Tile labels when previewing (row per Mac); nil for a real show.
+    private let preview: [[String]]?
     private let hostClock = CMClockGetHostTimeClock()
     /// [claude] The timeline's anchor: work `index` starts at show time `start`.
     /// `start` is what ShowState carries as the show's start (v1's h0).
@@ -168,7 +244,9 @@ final class Playback {
          allowSkip: Bool,
          onStateChange: ((ShowState) -> Void)?,
          onWindowsUp: @escaping () -> Void,
-         onEnd: @escaping () -> Void) {
+         onEnd: @escaping () -> Void,
+         preview: [[String]]? = nil) {
+        self.preview = preview
         self.screens = screens
         self.works = works
         self.timeline = Timeline(entries: works.map { .init(length: $0.length, repeat: $0.repeat) }, settings: playlist)
@@ -201,11 +279,21 @@ final class Playback {
     func start(following anchorIn: (index: Int, start: Double)? = nil) {
         // Build windows first, so every display goes black at once even while
         // the videos are still loading.
-        for screen in screens { windows.append(makeWindow(on: screen)) }
-        log("\(windows.count) window(s) up")
+        if let preview {
+            // [claude] P4e: one ordinary window, the tableau as tiles. No
+            // full screen, no hidden cursor or Dock: it's a look, not a show.
+            let (w, tiles) = makePreviewWindow(rows: preview)
+            windows = [w]
+            surfaces = tiles.map { (w, $0) }
+            log("preview up: \(tiles.count) screen(s)")
+        } else {
+            for screen in screens { windows.append(makeWindow(on: screen)) }
+            surfaces = windows.compactMap { w in w.contentView?.layer.map { (w, $0) } }
+            log("\(windows.count) window(s) up")
+            NSCursor.hide()
+            NSApp.presentationOptions = [.hideDock, .hideMenuBar]
+        }
         onWindowsUp()
-        NSCursor.hide()
-        NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
                                     IOPMAssertionLevel(kIOPMAssertionLevelOn),
                                     "tableauX is playing" as CFString, &sleepAssertion)
@@ -314,7 +402,8 @@ final class Playback {
     private func build(_ work: WorkPart) async throws -> [LivePanel] {
         var built: [LivePanel] = []
         do {
-            for (i, window) in windows.enumerated() {
+            for (i, surface) in surfaces.enumerated() {
+                let window = surface.window
                 guard i < work.panels.count, let path = work.panels[i].file, let d = work.durations[path], d > 0 else {
                     built.append(LivePanel(window: window, player: nil, layer: nil, itemDuration: 0, wraps: false, frame: 1.0 / 30, grace: sync.grace))
                     continue
@@ -332,7 +421,7 @@ final class Playback {
                 // At the end of the item, hold still rather than advance; the
                 // end is either the work's end or this screen's black (observeEnds).
                 player.actionAtItemEnd = .pause
-                let layer = attach(player, to: window, scaling: config.scaling)
+                let layer = attach(player, to: surface, scaling: config.scaling)
                 built.append(LivePanel(window: window, player: player, layer: layer, itemDuration: itemDuration,
                                        wraps: work.repeat == .untilNext, frame: 1 / max(fps, 1), grace: sync.grace))
             }
@@ -457,10 +546,30 @@ final class Playback {
         return w
     }
 
-    private func attach(_ player: AVPlayer, to window: PanelWindow, scaling: Scaling) -> AVPlayerLayer? {
-        guard let view = window.contentView, let root = view.layer else { return nil }
+    /// [claude] P4e: one preview window for the whole tableau, about two
+    /// thirds of the main display, centred. A titled window: it can be
+    /// moved, resized and closed (closing = Esc).
+    private func makePreviewWindow(rows: [[String]]) -> (PanelWindow, [CALayer]) {
+        let area = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let size = CGSize(width: area.width * 0.7, height: area.height * 0.6)
+        let w = PanelWindow(contentRect: CGRect(origin: .zero, size: size),
+                            styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+        w.title = "tableauX preview: Space pauses, → / ← change work, Esc closes"
+        w.isReleasedWhenClosed = false
+        let view = PreviewView(rows: rows)
+        w.contentView = view
+        w.center()
+        w.onKey = { [weak self] e in self?.handle(e) }
+        w.onClose = { [weak self] in self?.stop() }
+        w.makeKeyAndOrderFront(nil)
+        view.layoutSubtreeIfNeeded()
+        return (w, view.tiles)
+    }
+
+    private func attach(_ player: AVPlayer, to surface: (window: PanelWindow, host: CALayer), scaling: Scaling) -> AVPlayerLayer? {
+        let (window, root) = surface
         let layer = AVPlayerLayer(player: player)
-        layer.frame = view.bounds
+        layer.frame = root.bounds
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         // ASPECT GRAVITY: uniform scaling, so the image never stretches.
         // resizeAspect = fit (letterbox), resizeAspectFill = fill (crop).
@@ -630,8 +739,10 @@ final class Playback {
         revealTimer?.invalidate()
         driftTimer?.invalidate()
         unload()
-        NSApp.presentationOptions = []
-        NSCursor.unhide()
+        if preview == nil {                 // [claude] the preview hid neither
+            NSApp.presentationOptions = []
+            NSCursor.unhide()
+        }
         if sleepAssertion != 0 { IOPMAssertionRelease(sleepAssertion) }
         // Take the windows into a local first: onEnd() drops AppModel's
         // reference to this Playback, which may free it, so nothing below that

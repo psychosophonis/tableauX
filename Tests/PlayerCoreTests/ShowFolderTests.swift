@@ -61,6 +61,13 @@ final class ShowFolderTests: XCTestCase {
         XCTAssertEqual(legacy.shows, "/L")
     }
 
+    func testTheRoleALibraryGives() {
+        XCTAssertEqual(ShowFolder.role(shows: 2, works: 0), .conductor)
+        XCTAssertEqual(ShowFolder.role(shows: 0, works: 3), .player)
+        XCTAssertEqual(ShowFolder.role(shows: 0, works: 0), .standalone)      // a fresh, empty library
+        XCTAssertEqual(ShowFolder.defaultLibrary(home: "/Users/m"), "/Users/m/Movies/tableauX")
+    }
+
     func testALibraryRootCountsAsAShowFolder() {
         XCTAssertTrue(ShowFolder.isShowFolder(files: [], subfolders: ["Works": ["Smith"]]))
         XCTAssertTrue(ShowFolder.isShowFolder(files: [], subfolders: ["Shows": ["a.tableaux"]]))

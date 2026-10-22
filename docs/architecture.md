@@ -250,6 +250,7 @@ FolderScan.videos(_:) / .assign(folder:files:displays:)         // v4 P1: natura
 FolderScan.fill(_:folder:files:displays:firstScreen:) -> (panels, leftOver)  // v4: new displays take unused files; append-only
 FolderScan.screenNumber(_:) -> Int? ; .assign(…, firstScreen:)          // "_N" = tableau screen N (Mat, 2026-10-22)
 SharedShow.firstScreen(_:of:) -> Int                                    // a Mac's display 1 as a tableau screen number
+PreviewLayout.rows(_:work:) -> [[PreviewTile]]                          // v4 P4e: a row per Mac, a tile per display
 PlaylistMerge.merge(_:with:) / .length(of:in:)                  // v4 P1: works joined by folder name (T14)
 Timeline(entries:settings:).position(at:anchor:start:)          // v4 P1: pure timeline (T15)
 Timeline.screenPosition(elapsed:workLength:fileDuration:shorter:)
@@ -443,6 +444,10 @@ and works can move between shows.
   A work in several shows is one folder; moving a work between shows is a
   playlist edit, no files move. Per-show settings (repeat, shorter,
   screens, audio, scaling) live in each show file.
+- **No library anywhere (a fresh Mac): tableauX creates
+  `~/Movies/tableauX/{Works,Shows}` (Mat, 2026-10-22)** and says so in
+  setup, with Show in Finder. An empty library makes the Mac Standalone.
+  A folder in the old layout is never reorganised by the app.
 - **A folder without `Works/`** (today's layout: works directly inside,
   any show files beside them) is read as a library whose works pool and
   shows folder are that folder. Existing folders keep working.
@@ -466,6 +471,25 @@ and works can move between shows.
   the app. Not built: it would be a second description of a show to keep
   in step with the show file.
 
+### Preview (Mat, 2026-10-22)
+Aim (Mat): "test my shows on a single screen in a kind of virtual display."
+- **Preview** (beside Play) plays the open show in one window: **the whole
+  tableau (Mat)**, every screen of every Mac, **one row per Mac (Mat)**, a
+  16:9 tile per display labelled "Mac · display k · screen N".
+- [claude] Each tile plays the file its screen would, resolved against
+  THIS Mac's library: a curator's copy holding every Mac's files shows the
+  whole piece; a file not here leaves its tile black.
+- [claude] The same engine and timeline as a real show (gaps, repeats,
+  shorter screens, → / ←, Space; Esc or the close button ends it), on this
+  Mac's own clock; nothing is sent to players. Lengths: the show's, or the
+  longest file here if longer. Real playback draws each screen into its
+  display's window; the preview into a tile: the engine attaches players
+  to a SURFACE either way.
+- [claude] A laptop may not decode a whole tableau of 4K files smoothly:
+  the preview checks order, timing and assignment, not performance.
+- [claude] `--preview` on the command line opens it at launch (for checks
+  without a person).
+
 ### Zero setup (Mat, 2026-10-22)
 Aim (Mat): "minimise any step that requires going back to a client… send a
 copy of tableauX and a folder to the client and have it, as much as
@@ -482,7 +506,7 @@ possible, just work."
   Security.framework's SecTranslocateCreateOriginalPathForURL, looked up at
   run time. If that fails, the app's folder is skipped.
 - **The folder decides the role (Mat):** a show file in it = Conductor;
-  works but no show = Player; no folder = Standalone. A role chosen in
+  works but no show = Player; no folder, or an empty library = Standalone. A role chosen in
   setup overrides it from then on; a role saved by an earlier build counts
   as chosen.
 - [claude] The show opened at launch: the last one if it is in the media
@@ -702,7 +726,7 @@ Tests: `DisplayOrderTests`, `PlacementTests`, `SyncMathTests`, `ShowFileTests`,
 `NetworkClockTests`, `ClockReplayTests` (the real Wi-Fi recording),
 `FolderScanTests`, `PlaylistMergeTests`, `TimelineTests`, `ItemLayoutTests`,
 `CollectTests`, `FolderImportTests`, `FillTests`, `LinkFramingTests`,
-`SharedShowTests`, `ShowFolderTests`, `ScreenNumberTests` (v4).
+`SharedShowTests`, `ShowFolderTests`, `ScreenNumberTests`, `PreviewLayoutTests` (v4).
 Probes: also `proofs/clock-probe.swift` (T10, T11), `proofs/work-switch-probe.swift` (v4 riskiest assumption).
 Probes: `proofs/sync-probe.swift` (T1, T2, T4 on this machine).
 Lab checklist (T4 on the Mac mini, T6): `docs/LAB-TEST.md`.

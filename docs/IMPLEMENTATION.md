@@ -110,6 +110,7 @@ Risk order: the stages that could kill the idea come first.
 | P4b | Zero setup: `tableauX` folder (beside the app first), role from the folder, Bonjour discovery | Mat: send the app + a folder and it "just works" | **built 2026-10-22** `[claude]` (build 0.3.6): 6 new tests; run on this Mac (see notes); Bonjour on the uni network and translocation on a fresh Mac untested |
 | P4c | Test show packaged with the app (Mat: "for me, and for testing") | `scripts/make-test-show.sh` | **built 2026-10-22** `[claude]`: `dist/tableauX-0.3.6-test.zip` (10 MB): "Test conductor" + "Test player" folders; 2 works (red 12 s, blue 8 s) × 3 screens, count = seconds.frame, white flash each second. Conductor kit opened on this Mac: role and show from its folder, Play enabled |
 | P4d | Library: Works/ pool + Shows/ playlists; show menu; New show (all works); Add from library; conductor switches, players follow | Mat: many shows in one app, works movable between shows | **built 2026-10-22** `[claude]` (build 0.3.10): 5 new tests; kit run (see notes) |
+| P4e | Preview: the whole tableau in one window, a row per Mac | Mat: "test my shows on a single screen" | **built 2026-10-22** `[claude]` (build 0.3.12): 2 new tests; preview run of a 2-Mac (2 + 3 screens) show and a real-show regression run (see notes) |
 | P3 | Network: TCP channel; inventories → merged playlist → players; state with work index; file check | T16, T17 | |
 | P4 | Setup: playlist editor, folder import, per-work settings | a class set up in minutes | |
 | P5 | Two-Mac playlist run; 8 h soak on the Mac mini (T18) | release 0.3 | |
@@ -315,6 +316,21 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   at its 2 works (Lee offered in Add from library) and got screens for the
   work it shares. Not run: switching shows by hand (needs a click), New
   show, Collect into the library layout.
+- 0.3.11 (2026-10-22): a fresh Mac gets a library made for it,
+  ~/Movies/tableauX/{Works,Shows} (Mat), and starts Standalone. Run with a
+  stand-in home folder and no settings: created, Standalone, setup says
+  where to put works. Also: Mat's 30 s first launch from Espirit was macOS
+  checking a new ad-hoc-signed app on an external drive (the app's code
+  didn't start for 29.7 s; the log shows AMFI "adhoc signed"); later
+  launches of the same copy opened in under 1 s. Each new build repeats it
+  once; notarisation would remove it.
+- 0.3.12 (2026-10-22): P4e preview. Run (`--preview`) of a show for two
+  Macs (2 + 3 displays) from the test kit's files: 5 tiles in two rows,
+  all showing the same count (7.00) with the flash lit together, Mac B
+  display 2 black as set, "1 Red starts on time". Regression: a real show
+  (Play on launch, test kit) played full screen through the new surface
+  code, "1 Red starts on time". Not run: → / ← and the close button in the
+  preview by hand.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

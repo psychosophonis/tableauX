@@ -81,6 +81,25 @@ final class ScreenNumberTests: XCTestCase {
     }
 }
 
+/// [claude] P4e: the whole tableau laid out for one screen.
+final class PreviewLayoutTests: XCTestCase {
+    func testARowPerMacScreensNumberedAcrossAndBlackWhereUnset() {
+        let show = Show(machines: [Machine(name: "A", displays: 2), Machine(name: "B", displays: 3)])
+        let work = Work(name: "W", screens: ["A": [PanelConfig(file: "W/W_1.mov")],
+                                            "B": [PanelConfig(file: "W/W_3.mov"), PanelConfig(), PanelConfig(file: "W/W_5.mov")]])
+        let rows = PreviewLayout.rows(show, work: work)
+        XCTAssertEqual(rows.map { $0.map(\.machine) }, [["A", "A"], ["B", "B", "B"]])
+        XCTAssertEqual(rows.flatMap { $0.map(\.screen) }, [1, 2, 3, 4, 5])
+        XCTAssertEqual(rows[1].map(\.display), [1, 2, 3])
+        XCTAssertEqual(rows.flatMap { $0.map(\.panel.file) }, ["W/W_1.mov", nil, "W/W_3.mov", nil, "W/W_5.mov"])
+    }
+
+    func testAMacWithNoScreensForTheWorkStillHasItsTiles() {
+        let show = Show(machines: [Machine(name: "A", displays: 1), Machine(name: "B", displays: 2)])
+        XCTAssertEqual(PreviewLayout.rows(show, work: Work(name: "W")).map(\.count), [1, 2])
+    }
+}
+
 /// [claude] A display added after the scan takes the left-over files.
 final class FillTests: XCTestCase {
     private let files = ["3.mp4", "1.mp4", "10.mp4", "2.mp4", "notes.txt"]
