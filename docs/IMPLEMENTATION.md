@@ -393,7 +393,17 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   screens (Tableau down to 0) presents on the others with a remote strip
   (Space, ← →, Esc, Stop); Show menu › "Make kits for each Mac…". 4 new
   tests (158). Nothing of steps 2–4 run in a window or across Macs yet;
-  spec § Composing ahead still describes step 1 only.
+  spec § Composing ahead updated for steps 2–4 afterwards.
+- **P0 8 h probe, M3 Pro (2026-10-22, 09:22–17:25):** 2,880 swaps of 3 ×
+  60 Mbit/s 4K, 10 s each. Load median 0.18 s, p95 0.19 s, max 0.48 s (gap
+  3 s); creep ×1.05. Memory 28 MB after warm-up → 88 MB at the end, slope
+  +6.7 MB/h, steady (hourly 38, 46, 54, 59, 67, 75, 78 MB): within the
+  25 MB/h target but NOT levelling off, so a slow leak per swap. In use a
+  playlist swaps ~10–20 times an hour, not 360, so expect well under
+  1 MB/h; an 8 h day is harmless either way. Builds and Wi-Fi tests ran on
+  this Mac during the run (load spikes, max 0.48 s, are those). Still to
+  do: the same on the Mac mini (T18), and whether steady playback without
+  swaps grows at all.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

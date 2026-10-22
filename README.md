@@ -96,6 +96,14 @@ tableauX/
   copying only what isn't in the library already. **Export show as a
   library…** (Show menu) copies the show as a library of its own, to
   archive or hand on.
+- **Composing ahead**, on a laptop that holds all the files: **Add a Mac…**
+  in the Tableau line for each gallery Mac (a name like "Gallery 2" and
+  its displays), fill its screens from your library, Preview the whole
+  thing, then Show menu › **Make kits for each Mac…** and copy each kit to
+  its Mac. Each Mac recognises its part by its files, so the gallery
+  Macs' own names don't matter. To conduct from the laptop without it
+  showing anything, set its count in the Tableau line to 0; Present then
+  gives you remote controls in the window.
 - **Preview** (beside Play) plays the show in one window: every screen of
   every Mac as a tile, one row per Mac, from the files on this Mac. Use it
   to check order, timing and which file is on which screen; Esc closes it.

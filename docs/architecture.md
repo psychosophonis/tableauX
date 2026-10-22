@@ -602,6 +602,25 @@ laptop with a remote-control window; (4) a kit per Mac.
   they resolve on the gallery Mac when its Works/ has the same files), and
   its files, measured here, count for the work's length (until it reports
   its own). The preview already plays every Mac's screens from this Mac.
+- **Step 2 (built, 0.3.25): a Mac claims its part by its files.** [claude]
+  A Mac the show doesn't know by name (a player joining; a gallery Mac
+  opening the show from its kit) takes the unclaimed part whose screens use
+  the most of its files, only if it shares at least one and nothing ties
+  (`SharedShow.claim`). The part then carries the real computer name and
+  keeps its label. Otherwise the player is added as before, and the
+  unclaimed part's row on the conductor offers "Played by…".
+- **Step 3 (built, 0.3.25): a conductor with no screens.** [claude]
+  `Machine.noScreens`: on a conductor, the Tableau count for this Mac goes
+  down to 0 ("conducts only"); it then has no row and adds nothing to the
+  screen numbering. Present leaves its screen, cursor, Dock and menu bar
+  alone; the setup window shows a remote strip (state, ←, Pause, →, Stop;
+  Space, arrows, Esc).
+- **Step 4 (built, 0.3.25): kits.** [claude] Show menu › "Make kits for
+  each Mac…" asks which Mac conducts (this one: it keeps the show) and
+  where; writes "<show> – <label>/" per Mac with screens: the app, Works/
+  holding that Mac's files at their library paths (`Kits.plan`), and for
+  the conducting gallery Mac Shows/<show>.tableaux. Linked files are left
+  out and listed (Collect the show first); files not on this Mac listed.
 
 ### Zero setup (Mat, 2026-10-22)
 Aim (Mat): "minimise any step that requires going back to a client… send a
