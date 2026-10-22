@@ -269,8 +269,12 @@ final class Playback {
 
     private func report(_ phase: ShowState.Phase) {
         onStateChange?(ShowState(version: hostNanos(), phase: phase, start: anchor.start, pausedAt: pausedAt ?? 0,
-                                 index: anchor.index))
+                                 index: anchor.index, preview: isPreview))
     }
+
+    /// [claude] A preview (tiles in a window) rather than a show on the
+    /// displays. A conductor's preview tells players to preview too.
+    var isPreview: Bool { preview != nil }
 
     /// Starts the show. A leader (conductor, standalone) loads the first
     /// work and starts it 1 s after its panels are ready; a player passes the

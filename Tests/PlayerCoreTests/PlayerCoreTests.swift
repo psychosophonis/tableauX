@@ -154,6 +154,30 @@ final class SyncMathTests: XCTestCase {
 }
 
 final class ShowFileTests: XCTestCase {
+    /// [claude] Compose ahead (Mat, 2026-10-22): Macs by label, added before
+    /// they exist; labels survive a save; older files (no label) still open.
+    func testAMacAddedAheadByLabel() throws {
+        let s = Show(machines: [Machine(name: "Laptop", displays: 1)], works: [Work(name: "W")])
+        let added = try XCTUnwrap(s.addingMachine(label: " Gallery 2 ", displays: 3))
+        XCTAssertEqual(added.machines.last, Machine(name: "Gallery 2", displays: 3, label: "Gallery 2"))
+        XCTAssertEqual(added.machines.last?.displayName, "Gallery 2")
+        XCTAssertNil(added.addingMachine(label: "Gallery 2", displays: 1))           // taken
+        XCTAssertNil(added.addingMachine(label: "Laptop", displays: 1))
+        XCTAssertNil(added.addingMachine(label: "  ", displays: 1))
+        XCTAssertEqual(try ShowFile.decode(ShowFile.encode(added)), added)
+        let old = Data(#"{"version":3,"machines":[{"name":"A","displays":2}],"works":[],"playlist":{"gap":3,"loop":true},"sync":{"tolerance":3,"grace":5},"playOnLaunch":false}"#.utf8)
+        XCTAssertNil(try ShowFile.decode(old).machines[0].label)
+    }
+
+    func testRemovingAMacTakesItsScreensOnly() {
+        let s = Show(machines: [Machine(name: "A", displays: 1), Machine(name: "B", displays: 2)],
+                     works: [Work(name: "W", screens: ["A": [PanelConfig(file: "W/a.mov")], "B": [PanelConfig(file: "W/b.mov")]])])
+        let r = s.removingMachine("B")
+        XCTAssertEqual(r.machines.map(\.name), ["A"])
+        XCTAssertNil(r.works[0].screens["B"])
+        XCTAssertEqual(r.works[0].screens["A"], s.works[0].screens["A"])
+    }
+
     func testRoundTrip() throws {
         let smith = Work(name: "Smith",
                          screens: ["Lab Mac mini": [PanelConfig(file: "Smith/1.mp4", audio: true, scaling: .fill),

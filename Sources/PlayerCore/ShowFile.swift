@@ -26,10 +26,19 @@ public struct PanelConfig: Codable, Equatable {
 public struct Machine: Codable, Equatable {
     public var name: String
     public var displays: Int
+    /// [claude] The name PEOPLE see ("Gallery 2"), when it differs from the
+    /// computer's name (Mat, 2026-10-22: institutional Macs can't be
+    /// renamed, and a show is composed before its Macs are there). A Mac
+    /// added ahead has name = label until it is claimed by a real Mac.
+    /// Optional, so show files from before it still open.
+    public var label: String?
 
-    public init(name: String, displays: Int = 0) {
-        self.name = name; self.displays = displays
+    public init(name: String, displays: Int = 0, label: String? = nil) {
+        self.name = name; self.displays = displays; self.label = label
     }
+
+    /// What setup and the preview call this Mac.
+    public var displayName: String { label ?? name }
 }
 
 /// [claude] How closely the show holds its panels to the shared clock
@@ -80,6 +89,27 @@ public struct Show: Codable, Equatable {
     public func machineIndex(named name: String) -> Int? {
         if let i = machines.firstIndex(where: { $0.name == name }) { return i }
         return machines.count == 1 ? 0 : nil
+    }
+
+    /// [claude] Compose ahead (Mat, 2026-10-22): the show with a Mac that
+    /// isn't here yet, added at the end (its screens number after the
+    /// others), named by its label until a real Mac claims it. nil if the
+    /// label is empty or already a Mac's name or label.
+    public func addingMachine(label: String, displays: Int) -> Show? {
+        let l = label.trimmingCharacters(in: .whitespaces)
+        guard !l.isEmpty, !machines.contains(where: { $0.name == l || $0.label == l }) else { return nil }
+        var s = self
+        s.machines.append(Machine(name: l, displays: min(max(displays, 1), 16), label: l))
+        return s
+    }
+
+    /// The show without Mac `name`, and without its screens in every work.
+    /// The Macs after it move up, so their screen numbers change.
+    public func removingMachine(_ name: String) -> Show {
+        var s = self
+        s.machines.removeAll { $0.name == name }
+        for w in s.works.indices { s.works[w].screens[name] = nil }
+        return s
     }
 }
 

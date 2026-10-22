@@ -199,13 +199,23 @@ public struct ShowState: Equatable, Sendable {   // Sendable: plain values, safe
     /// computes them from the anchor); → / ← move the anchor, and this is how
     /// the players hear of it.
     public var index: Int
+    /// [claude] The conductor is PREVIEWING, not presenting (Mat, 2026-10-22:
+    /// "preview the three screens on the remote client as the conductor
+    /// plays its preview"): players open a preview window of their own
+    /// screens instead of going full screen. Carried in bit 8 of the phase
+    /// word, so the state stays 48 bytes; an older build sees an unknown
+    /// phase and ignores the state rather than presenting by mistake.
+    public var preview: Bool
 
-    public init(version: UInt64, phase: Phase, start: Double = 0, pausedAt: Double = 0, index: Int = 0) {
+    static let previewBit: UInt64 = 0x100
+
+    public init(version: UInt64, phase: Phase, start: Double = 0, pausedAt: Double = 0, index: Int = 0, preview: Bool = false) {
         self.version = version; self.phase = phase; self.start = start; self.pausedAt = pausedAt; self.index = index
+        self.preview = preview
     }
 
     public var bytes: [UInt8] {
-        let words = [Self.magic, version, phase.rawValue,
+        let words = [Self.magic, version, phase.rawValue | (preview ? Self.previewBit : 0),
                      UInt64(max(start, 0) * 1e9), UInt64(max(pausedAt, 0) * 1e9), UInt64(max(index, 0))]
         return words.flatMap { v in (0..<8).map { UInt8(truncatingIfNeeded: v.littleEndian >> ($0 * 8)) } }
     }
@@ -213,10 +223,13 @@ public struct ShowState: Equatable, Sendable {   // Sendable: plain values, safe
     public init?(bytes: [UInt8]) {
         guard bytes.count == Self.size else { return nil }
         func word(_ i: Int) -> UInt64 { (0..<8).reduce(0) { $0 | UInt64(bytes[i * 8 + $1]) << ($1 * 8) } }
+        let p = word(2)
+        // Only the phase and the preview bit may be set; anything else isn't ours.
         // A work index beyond any real playlist is corruption, not a show.
-        guard word(0) == Self.magic, let phase = Phase(rawValue: word(2)), word(5) < 1_000_000 else { return nil }
+        guard word(0) == Self.magic, p & ~(0xFF | Self.previewBit) == 0, let phase = Phase(rawValue: p & 0xFF),
+              word(5) < 1_000_000 else { return nil }
         self.init(version: word(1), phase: phase, start: Double(word(3)) / 1e9, pausedAt: Double(word(4)) / 1e9,
-                  index: Int(word(5)))
+                  index: Int(word(5)), preview: p & Self.previewBit != 0)
     }
 }
 

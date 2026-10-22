@@ -109,6 +109,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Compose ahead (Mat, 2026-10-22) [claude]
+
+    /// What people call Mac `m` in setup and the preview: its label, else its name.
+    func displayName(of m: String) -> String {
+        show.machines.first { $0.name == m }?.displayName ?? m
+    }
+
+    /// A Mac that isn't here yet ("Gallery 2", 3 displays), added to the
+    /// tableau after the others so a show can be composed in advance.
+    func addMachine(label: String, displays: Int) {
+        guard let s = show.addingMachine(label: label, displays: displays) else {
+            lastError = "There's already a Mac called “\(label)” in this show (or the name is empty)."
+            return
+        }
+        show = s
+    }
+
+    /// Takes a Mac out of the show, with its screens. Not this Mac, and not
+    /// one that's connected now (it would only be added back).
+    func removeMachine(_ m: String) {
+        guard m != machineName, !isConnected(m) else { return }
+        show = show.removingMachine(m)
+    }
+
+    /// The files a screen of Mac `m` can be set to: what that Mac reported
+    /// or, for a Mac that hasn't (a Mac composed ahead), THIS Mac's library,
+    /// whose paths are relative to Works/ and so resolve there too.
+    func choosableFiles(for m: String) -> (files: [String], fromThisLibrary: Bool) {
+        if m == machineName { return (ownFiles, true) }
+        let reported = reportedFiles(of: m).map(\.path)
+        return reported.isEmpty ? (ownFiles, true) : (reported, false)
+    }
+
     /// [claude] Can this Mac edit machine `m`'s screens? The conductor and a
     /// standalone Mac: any. A player: its own, while the conductor is
     /// connected (offline edits would be overwritten by the next show).
@@ -149,6 +182,9 @@ final class AppModel: ObservableObject {
             guard i < ps.count else { return }
             ps[i] = new
             self.show.works[self.selectedWork].screens[m] = ps
+            // [claude] Compose ahead: measure a file chosen for a Mac that
+            // isn't here, so the work's length counts it.
+            if let f = new.file.map(self.resolve), self.fileExists(f) { self.loadInfo(f) }
         })
     }
 
@@ -184,10 +220,10 @@ final class AppModel: ObservableObject {
     /// player's inventory, and a player uses exactly what the conductor sent.
     func length(of w: Int) -> Double {
         switch mode {
-        case .standalone: return ownLength(of: w)
+        case .standalone: return max(ownLength(of: w), aheadLength(of: w))
         case .conductor:
             guard show.works.indices.contains(w) else { return 0 }
-            return max(ownLength(of: w), PlaylistMerge.length(of: show.works[w], in: Array(reported.values)))
+            return max(ownLength(of: w), aheadLength(of: w), PlaylistMerge.length(of: show.works[w], in: Array(reported.values)))
         case .player:
             guard let lengths = sharedLengths, lengths.indices.contains(w) else { return ownLength(of: w) }
             return lengths[w]
@@ -605,7 +641,22 @@ final class AppModel: ObservableObject {
     private func loadAllInfo() {
         for w in show.works.indices {
             panels(of: w).compactMap(\.file).map(resolve).filter(fileExists).forEach(loadInfo)
+            aheadFiles(of: w).forEach(loadInfo)
         }
+    }
+
+    /// [claude] Compose ahead: the files of Macs that haven't reported (not
+    /// here yet), as found in THIS Mac's library, so a work's length counts
+    /// their screens too. Once a Mac reports, its own report counts instead.
+    private func aheadFiles(of w: Int) -> [String] {
+        guard show.works.indices.contains(w), mode != .player else { return [] }
+        return show.machines.filter { $0.name != machineName && reported[$0.name] == nil }.flatMap { m in
+            (show.works[w].screens[m.name] ?? []).prefix(m.displays).compactMap(\.file).map(resolve).filter(fileExists)
+        }
+    }
+
+    private func aheadLength(of w: Int) -> Double {
+        aheadFiles(of: w).compactMap { media[$0]?.duration }.max() ?? 0
     }
 
     // MARK: Collect and import (§ v4 › Collecting and importing) [claude]
@@ -935,12 +986,27 @@ final class AppModel: ObservableObject {
             if isPlaying { NSLog("follow: conductor stopped"); stop() }
         case .playing, .paused:
             if let playback {
+                // [claude] The conductor switched between preview and
+                // present: stop this kind and start the other at once.
+                if playback.isPreview != s.preview {
+                    switchingKind = true
+                    stop()
+                    switchingKind = false
+                    if s.preview { previewFollowing(s) } else { startPlayback(following: s) }
+                    return
+                }
                 playback.follow(s)
             } else if s.phase == .playing, s.version != dismissedVersion {
-                startPlayback(following: s)
+                // [claude] Networked preview: the conductor's preview opens
+                // this Mac's own preview (Mat, 2026-10-22).
+                if s.preview { previewFollowing(s) } else { startPlayback(following: s) }
             }
         }
     }
+
+    /// Set while switching between preview and present on a player, so the
+    /// stop in between isn't taken for a person's Esc.
+    private var switchingKind = false
 
     // MARK: The link: one playlist for every Mac (v4 P3b) [claude]
 
@@ -1676,8 +1742,8 @@ final class AppModel: ObservableObject {
 
     /// Every screen of the tableau, the file it would play resolved against
     /// THIS Mac's library, or nil if that file isn't here.
-    private func previewPanels(_ work: Work) -> [PanelConfig] {
-        PreviewLayout.rows(show, work: work).flatMap { $0 }.map { t in
+    private func previewPanels(_ work: Work, onlyMachine: String? = nil) -> [PanelConfig] {
+        PreviewLayout.rows(show, work: work).flatMap { $0 }.filter { onlyMachine == nil || $0.machine == onlyMachine }.map { t in
             var p = t.panel
             p.file = p.file.map(resolve).flatMap { fileExists($0) && !unreadable.contains($0) ? $0 : nil }
             return p
@@ -1694,39 +1760,71 @@ final class AppModel: ObservableObject {
         for w in show.works { previewPanels(w).compactMap(\.file).forEach(loadInfo) }
         Task {
             await infoLoaded()
-            startPreview()
+            startPreview(following: nil)
         }
     }
 
-    private func startPreview() {
+    /// [claude] Networked preview (Mat, 2026-10-22): a player following the
+    /// conductor's preview opens its own preview, of ITS screens only.
+    private var previewStarting = false
+
+    private func previewFollowing(_ s: ShowState) {
+        guard !previewStarting else { return }          // states arrive every second; once is enough
+        previewStarting = true
+        for w in show.works { previewPanels(w).compactMap(\.file).forEach(loadInfo) }
+        Task {
+            await infoLoaded()
+            previewStarting = false
+            // The conductor may have moved on while this Mac measured.
+            guard let now = follower.current, now.preview, now.phase != .stopped else { return }
+            startPreview(following: now)
+        }
+    }
+
+    /// `following` nil: this Mac leads (standalone, or the conductor, whose
+    /// preview is published so players preview with it). Otherwise a player
+    /// joining the conductor's preview with its own screens.
+    private func startPreview(following s: ShowState?) {
         guard !isPlaying else { return }
+        let me = machineName
+        let ownOnly = s != nil
+        var clock = ShowClock.local
+        if s != nil {
+            guard let client, client.hostTime(conductor: 0) != nil else { return }      // no clock yet: next state
+            clock = .following(client)
+        }
         let parts = show.works.enumerated().map { w, work -> WorkPart in
-            let ps = previewPanels(work)
+            let ps = previewPanels(work, onlyMachine: ownOnly ? me : nil)
             let durations = Dictionary(ps.compactMap { p in p.file.flatMap { f in media[f].map { (f, $0.duration) } } },
                                        uniquingKeysWith: { a, _ in a })
-            // The show's own length where known (the conductor's, across
-            // Macs), or the longest file here if that is longer.
-            return WorkPart(name: work.name, panels: ps, durations: durations,
-                            length: max(length(of: w), durations.values.max() ?? 0),
+            // Across Macs every preview must time works alike: the shared
+            // lengths (a player's are the conductor's). On its own, a Mac
+            // may also use the longest file it happens to have.
+            let len = mode == .standalone ? max(length(of: w), durations.values.max() ?? 0) : length(of: w)
+            return WorkPart(name: work.name, panels: ps, durations: durations, length: len,
                             repeat: work.repeat, shorter: work.shorter)
         }
-        guard parts.contains(where: { $0.length > 0 }) else {
+        guard s != nil || parts.contains(where: { $0.length > 0 }) else {
             lastError = "Nothing to preview: none of this show's files are on this Mac."
             return
         }
-        let labels = PreviewLayout.rows(show, work: show.works[0]).map { row in
-            row.map { "\($0.machine) · display \($0.display) · screen \($0.screen)" }
-        }
+        let labels = PreviewLayout.rows(show, work: show.works[0])
+            .filter { !ownOnly || $0.first?.machine == me }
+            .map { row in row.map { "\(displayName(of: $0.machine)) · display \($0.display) · screen \($0.screen)" } }
         lastError = nil
-        let pb = Playback(screens: [], works: parts, playlist: show.playlist, sync: show.sync, clock: .local,
-                          allowSkip: true, onStateChange: { _ in },     // leads, but tells nobody
+        // A conductor's preview is published (flagged preview) so players
+        // preview with it; standalone leads and tells nobody; a player follows.
+        let report: ((ShowState) -> Void)? = s != nil ? nil
+            : mode == .conductor ? { [weak self] state in self?.server?.publish(state) } : { _ in }
+        let pb = Playback(screens: [], works: parts, playlist: show.playlist, sync: show.sync, clock: clock,
+                          allowSkip: true, onStateChange: report,
                           onWindowsUp: {}, onEnd: { [weak self] in self?.playbackEnded() },
                           preview: labels)
         playback = pb
         isPlaying = true
         previewing = true
-        NSLog("preview: %d work(s), %d screen(s)", parts.count, labels.joined().count)
-        pb.start()
+        NSLog("preview: %d work(s), %d screen(s)%@", parts.count, labels.joined().count, s != nil ? ", following the conductor" : "")
+        pb.start(following: s.map { ($0.index, $0.start) })
     }
 
     static let setupTitle = "tableauX"
@@ -1741,7 +1839,10 @@ final class AppModel: ObservableObject {
         let wasPreview = previewing
         previewing = false
         setupWindows.forEach { $0.makeKeyAndOrderFront(nil) }
-        if wasPreview { return }            // [claude] P4e: a preview told nobody it started
+        // [claude] Standalone, a preview told nobody it started. A conductor's
+        // preview did (networked preview), so its end is published below.
+        if wasPreview, mode == .standalone { return }
+        if switchingKind { return }         // a player changing kind, not a person's Esc
         // [claude] The conductor's Esc ends the show everywhere.
         if mode == .conductor { server?.publish(ShowState(version: hostNanos(), phase: .stopped)) }
         // A player stopped by a person (not by the conductor) stays out of this state.

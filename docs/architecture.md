@@ -559,6 +559,17 @@ Aim (Mat): "test my shows on a single screen in a kind of virtual display."
   the preview checks order, timing and assignment, not performance.
 - [claude] `--preview` on the command line opens it at launch (for checks
   without a person).
+- **Networked preview (Mat, 2026-10-22: "preview the three screens on the
+  remote client as the conductor plays its preview, so I can test the
+  remote without connecting its screens").** [claude] The conductor's
+  Preview publishes its state flagged `preview` (bit 8 of the phase word;
+  still 48 bytes; older builds ignore it). Each connected player opens a
+  preview window of ITS OWN screens, on the conductor's clock, timed by
+  the shared lengths, so it runs in step with the conductor's preview;
+  Space, → / ← and Esc follow. Missing files leave black tiles (it's a
+  test; Present still checks). Switching between preview and present on
+  the conductor switches the players. Across Macs the conductor's preview
+  uses the shared lengths only, as the players do.
 - **A Mac's `displays` in the show is the DESIGNED count (Mat, 2026-10-22:
   "preview as if they were connected").** [claude] Set from the connected
   (or reported) count when a Mac is first added; afterwards it only grows
@@ -574,6 +585,23 @@ Aim (Mat): "test my shows on a single screen in a kind of virtual display."
   New show…) and when the conductor first adds a player, the count starts
   at the most any work needs: its highest "_N" from that Mac's first
   screen, or its number of videos; at least what is connected; at most 16.
+
+### Composing ahead (Mat, 2026-10-22)
+Aim (Mat): "compose remotely in advance of having the clients available…
+I have all files on my composing machine." Institutional Macs can't be
+renamed; the composer may be the conductor, or a gallery Mac may be.
+Agreed in four steps: (1) add Macs by label and fill them from this
+library; (2) match a Mac to its part by its files; (3) a conductor-only
+laptop with a remote-control window; (4) a kit per Mac.
+- **Step 1 (built, 0.3.24):** [claude] `Machine.label` (optional in the
+  file): the name people see ("Gallery 2"), shown in setup and the
+  preview. "Add a Mac…" in the Tableau line (label, displays) appends it;
+  a Mac that isn't this one and isn't connected can be removed (its
+  screens go; later Macs move up). A Mac that hasn't reported offers THIS
+  Mac's library in its screens' file menu (paths relative to Works/, so
+  they resolve on the gallery Mac when its Works/ has the same files), and
+  its files, measured here, count for the work's length (until it reports
+  its own). The preview already plays every Mac's screens from this Mac.
 
 ### Zero setup (Mat, 2026-10-22)
 Aim (Mat): "minimise any step that requires going back to a client… send a

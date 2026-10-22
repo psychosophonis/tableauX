@@ -195,6 +195,20 @@ final class NetworkClockTests: XCTestCase {
 
     /// [claude] v4 P3: the state names the anchor work, and a 40-byte state
     /// from an older build (no work index) is refused, not misread.
+    /// [claude] Networked preview (Mat, 2026-10-22): the flag travels; a
+    /// present state is byte-for-byte what it was; stray bits are refused.
+    func testPreviewFlagTravelsAndPresentStatesAreUnchanged() {
+        let p = ShowState(version: 7, phase: .playing, start: 50, index: 1, preview: true)
+        XCTAssertEqual(ShowState(bytes: p.bytes)?.preview, true)
+        XCTAssertEqual(ShowState(bytes: p.bytes)?.phase, .playing)
+        let present = ShowState(version: 7, phase: .playing, start: 50, index: 1)
+        XCTAssertEqual(present.bytes[16], 1)                         // phase word exactly as before
+        XCTAssertEqual(ShowState(bytes: present.bytes)?.preview, false)
+        var stray = present.bytes
+        stray[18] = 1                                                // a bit beyond phase and preview
+        XCTAssertNil(ShowState(bytes: stray))
+    }
+
     func testStateCarriesTheWorkAndOldStatesAreRefused() {
         let s = ShowState(version: 5, phase: .playing, start: 1000, index: 3)
         XCTAssertEqual(ShowState(bytes: s.bytes)?.index, 3)

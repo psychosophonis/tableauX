@@ -32,6 +32,9 @@ struct TableauMap: View {
 /// with fewer screens leaves the rest black (a tile set to None).
 struct TableauSizeRow: View {
     @ObservedObject var model: AppModel
+    @State private var adding = false
+    @State private var newLabel = ""
+    @State private var newDisplays = 3
 
     var body: some View {
         HStack(spacing: 14) {
@@ -39,11 +42,40 @@ struct TableauSizeRow: View {
             ForEach(model.show.machines, id: \.name) { m in
                 let isThisMac = m.name == model.machineName
                 let count = isThisMac ? model.designDisplays : m.displays
-                Stepper("\(m.name): \(count) display\(count == 1 ? "" : "s")",
-                        value: Binding(get: { count }, set: { model.setDisplays(m.name, $0) }),
-                        in: (isThisMac ? max(model.displays.count, 1) : 1)...16)
-                    .fixedSize()
+                HStack(spacing: 2) {
+                    Stepper("\(m.displayName): \(count) display\(count == 1 ? "" : "s")",
+                            value: Binding(get: { count }, set: { model.setDisplays(m.name, $0) }),
+                            in: (isThisMac ? max(model.displays.count, 1) : 1)...16)
+                        .fixedSize()
+                    // [claude] Compose ahead: a Mac added for later can go
+                    // again (not this Mac, not one that's connected).
+                    if !isThisMac, !model.isConnected(m.name) {
+                        Button { model.removeMachine(m.name) } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless)
+                            .help("Remove \(m.displayName) from this show, with its screens. The Macs after it move up a place.")
+                    }
+                }
             }
+            // [claude] Compose ahead (Mat, 2026-10-22): Macs that aren't here
+            // yet, named by a label ("Gallery 2"). Their screens are filled
+            // from this Mac's library and previewed from it.
+            Button("Add a Mac…") { newLabel = "Gallery \(model.show.machines.count + 1)"; adding = true }
+                .popover(isPresented: $adding, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("A Mac that will play part of this show").font(.headline)
+                        TextField("Name", text: $newLabel).frame(width: 220)
+                        Stepper("\(newDisplays) display\(newDisplays == 1 ? "" : "s")", value: $newDisplays, in: 1...16)
+                        Text("Its screens come after the others. Fill them from this Mac's library; when the real Mac joins, it takes this part.")
+                            .font(.caption).foregroundStyle(.secondary).frame(width: 260, alignment: .leading)
+                        HStack {
+                            Spacer()
+                            Button("Cancel") { adding = false }
+                            Button("Add") { model.addMachine(label: newLabel, displays: newDisplays); adding = false }
+                                .keyboardShortcut(.defaultAction)
+                        }
+                    }
+                    .padding()
+                }
             Spacer()
             Text("for every work in this show; a work with fewer screens leaves the rest black")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -66,7 +98,8 @@ private struct MachineRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(machine).font(.headline).lineLimit(1).help(machine)
+                Text(model.displayName(of: machine)).font(.headline).lineLimit(1)
+                    .help(model.displayName(of: machine) == machine ? machine : "\(model.displayName(of: machine)) (this computer: \(machine))")
                 Text(isThisMac ? "this Mac · \(state)" : state).font(.caption).foregroundStyle(.secondary)
                 // [claude] No display count here: it is the SHOW's, the same
                 // for every work (Mat's triptych), so it lives in the
@@ -89,7 +122,7 @@ private struct MachineRow: View {
     private var state: String {
         if isThisMac { return "\(min(model.displays.count, count)) of \(count) connected here" }
         if model.isConnected(machine) { return "connected" }
-        return model.inventory(of: machine) == nil ? "not heard from yet" : "not connected"
+        return model.inventory(of: machine) == nil ? "not here yet: files from this Mac" : "not connected"
     }
 }
 
@@ -140,7 +173,7 @@ private struct ScreenTile: View {
                               style: StrokeStyle(lineWidth: missing || editing ? 2 : 1, dash: connected ? [] : [4, 3])))
         }
         .buttonStyle(.plain)
-        .help("\(machine) · display \(index + 1) · screen \(screen)" + (missing ? " · file not found" : ""))
+        .help("\(model.displayName(of: machine)) · display \(index + 1) · screen \(screen)" + (missing ? " · file not found" : ""))
         .popover(isPresented: $editing, arrowEdge: .bottom) {
             // [claude] A player edits its own screens (sent to the conductor);
             // other Macs' screens are the conductor's to set.
@@ -175,11 +208,18 @@ private struct ScreenEditor: View {
     @Binding var panel: PanelConfig
 
     private var isThisMac: Bool { machine == model.machineName }
-    private var files: [String] { isThisMac ? model.ownFiles : model.reportedFiles(of: machine).map(\.path) }
+    /// That Mac's reported files, or, for a Mac composed ahead (nothing
+    /// reported), this Mac's library (compose ahead, Mat 2026-10-22).
+    private var files: [String] { model.choosableFiles(for: machine).files }
+    private var fromThisLibrary: Bool { model.choosableFiles(for: machine).fromThisLibrary }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("\(machine) · display \(index + 1) · screen \(screen)").font(.headline)
+            Text("\(model.displayName(of: machine)) · display \(index + 1) · screen \(screen)").font(.headline)
+            if !isThisMac, fromThisLibrary {
+                Text("\(model.displayName(of: machine)) hasn't reported its files: choosing from this Mac's library. Its Works folder will need the same files.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Picker("File", selection: $panel.file) {
                 Text("None: this screen stays black").tag(String?.none)
                 // A file not in the list (linked from elsewhere, or no longer
@@ -212,10 +252,10 @@ private struct ScreenEditor: View {
     /// "12.0 s · 30 fps" from a player's report.
     private var details: String? {
         guard let f = panel.file else { return nil }
-        if isThisMac {
+        if isThisMac || fromThisLibrary {
             guard let info = model.media[model.resolve(f)] else { return model.fileExists(model.resolve(f)) ? "Reading the file…" : "File not found." }
             var parts = ["\(Int(info.size.width)) × \(Int(info.size.height))", String(format: "%.1f s", info.duration)]
-            if index < model.displays.count {
+            if isThisMac, index < model.displays.count {
                 let s = Placement.scale(video: info.size, display: model.displays[index].pixelSize, scaling: panel.scaling)
                 parts.append((s == s.rounded() ? "\(Int(s))×" : String(format: "%.2f×", Double(s))) + " on this display")
             }

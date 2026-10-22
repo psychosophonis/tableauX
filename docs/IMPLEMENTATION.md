@@ -381,6 +381,13 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   player's library are reported under their full path for lengths and the
   file check, and kept out of the pool. 2 new tests (151). Not run across
   Macs yet: part of the Wi-Fi run.
+- 0.3.23 (2026-10-22): networked preview (Mat): the conductor's Preview
+  opens each player's own preview, in step. ShowState preview flag (1 new
+  test, 152). Not run across Macs yet. Mat reported 0.3.22 "working well"
+  in use (details to come with the Wi-Fi run).
+- 0.3.24 (2026-10-22): compose ahead, step 1 of 4: Macs by label, Add a
+  Mac… / remove, their screens filled from this library and counted for
+  work lengths. 2 new tests (154). Not looked at in a window.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen
