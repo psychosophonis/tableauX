@@ -14,7 +14,7 @@ Governs:
 - `Sources/**` (PlayerCore: § Model, § Sync, § API Contracts; app shell: § Sync, § UI)
 - `Tests/**` (§ Verification)
 - `Package.swift`
-- `scripts/**` (test media for T6, § Targets)
+- `scripts/**` (test media for T6, § Targets; make-app.sh's release packaging is described in its own header, not in a spec section)
 
 Verify:
 ```

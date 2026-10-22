@@ -16,7 +16,7 @@
 # Security → Open Anyway (see README.md).
 #
 # Usage: scripts/make-app.sh [version]     e.g. scripts/make-app.sh 0.1.0
-# Output: dist/tableauX.app and dist/tableauX-<version>.zip
+# Output: dist/tableauX.app, dist/tableauX-<version>.zip and dist/tableauX.zip
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,5 +58,11 @@ EOF
 codesign --force --sign - "$app"
 # ditto, not zip: it keeps the bundle's metadata and code signature intact.
 ditto -c -k --keepParent "$app" "dist/${name}-${version}.zip"
+# [claude] The same zip under a FIXED name, uploaded to every release too.
+# GitHub serves releases/latest/download/<asset name> as a permanent link to
+# that asset on the newest release, so the README can offer a one-click
+# download that never needs editing. It only works if the name never changes,
+# hence no version in it. A copy, not a second ditto, so the bytes match.
+cp "dist/${name}-${version}.zip" "dist/${name}.zip"
 echo "built ${app} ($(lipo -archs "${app}/Contents/MacOS/${name}"))"
-echo "zipped dist/${name}-${version}.zip"
+echo "zipped dist/${name}-${version}.zip (and dist/${name}.zip for the latest link)"

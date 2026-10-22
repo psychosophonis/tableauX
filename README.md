@@ -1,7 +1,8 @@
 # tableauX
 
-**[⬇ Download the latest version](../../releases/latest)**: open the page
-and click `tableauX-<version>.zip` under Assets.
+**[⬇ Download tableauX](../../releases/latest/download/tableauX.zip)**
+(latest version, Apple silicon and Intel, macOS 13+). Then see
+[First launch](#first-launch).
 
 tableauX plays multiscreen video works across any number of displays. A work
 can use the displays on one Mac, or the displays on several Macs, each with
@@ -25,8 +26,9 @@ It's a Mac app (macOS 13 or later, Apple silicon or Intel).
 
 ## Download
 
-Get `tableauX-<version>.zip` from the
-[latest release](../../releases/latest), unzip it, and move **tableauX** to
+[Download tableauX.zip](../../releases/latest/download/tableauX.zip) (the
+[latest release](../../releases/latest) also has it as
+`tableauX-<version>.zip`), unzip it, and move **tableauX** to
 Applications. It runs on Apple silicon and Intel Macs, macOS 13 or later.
 
 ### First launch
