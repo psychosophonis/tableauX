@@ -21,6 +21,15 @@ final class ShowFolderTests: XCTestCase {
                        "/Users/m/Movies/tableauX")
     }
 
+    /// Mat's layout: the app and a tableauX folder side by side.
+    func testATableauXFolderBesideTheAppIsFound() {
+        let d = disk(["/Volumes/E/testshow": ([], ["tableauX": ["work1", "work2"]]),
+                      "/Volumes/E/testshow/tableauX": ([], ["work1": ["Comp 4_1.mov"]]),
+                      "/Users/m/tableauX": ([], [:])])
+        XCTAssertEqual(ShowFolder.pick(chosen: nil, appFolder: "/Volumes/E/testshow", home: "/Users/m", listing: d),
+                       "/Volumes/E/testshow/tableauX")
+    }
+
     func testHomeThenMoviesThenDesktop() {
         let both = disk(["/Users/m/Desktop/tableauX": ([], [:]), "/Users/m/tableauX": ([], [:])])
         XCTAssertEqual(ShowFolder.pick(chosen: nil, appFolder: nil, home: "/Users/m", listing: both), "/Users/m/tableauX")
@@ -40,6 +49,26 @@ final class ShowFolderTests: XCTestCase {
         XCTAssertTrue(ShowFolder.isShowFolder(files: [], subfolders: ["Smith": ["1.mov"]]))
         XCTAssertFalse(ShowFolder.isShowFolder(files: ["notes.txt"], subfolders: ["Empty": ["a.txt"], ".hidden": ["1.mp4"]]))
         XCTAssertEqual(ShowFolder.shows(in: ["a.tableaux", ".b.tableaux", "c.mp4"]), ["a.tableaux"])
+    }
+
+    // P4d, the library.
+
+    func testALibraryKeepsWorksAndShowsApartALegacyFolderIsBoth() {
+        XCTAssertEqual(ShowFolder.layout(root: "/L", subfolders: ["Works", "Shows"]).works, "/L/Works")
+        XCTAssertEqual(ShowFolder.layout(root: "/L", subfolders: ["works"]).shows, "/L/Shows")      // Shows made when first saved
+        let legacy = ShowFolder.layout(root: "/L", subfolders: ["Smith", "Jones"])
+        XCTAssertEqual(legacy.works, "/L")
+        XCTAssertEqual(legacy.shows, "/L")
+    }
+
+    func testALibraryRootCountsAsAShowFolder() {
+        XCTAssertTrue(ShowFolder.isShowFolder(files: [], subfolders: ["Works": ["Smith"]]))
+        XCTAssertTrue(ShowFolder.isShowFolder(files: [], subfolders: ["Shows": ["a.tableaux"]]))
+    }
+
+    func testThePoolIsEveryMacsWorksOnceInNameOrder() {
+        let inv = Inventory(machine: "B", displays: 1, folders: ["Lee": [], "Smith": []])
+        XCTAssertEqual(ShowFolder.pool(own: ["Smith", "Jones", ".git"], inventories: [inv]), ["Jones", "Lee", "Smith"])
     }
 
     func testWhichShowOpensAtLaunch() {

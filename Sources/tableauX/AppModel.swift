@@ -200,7 +200,7 @@ final class AppModel: ObservableObject {
         p.canChooseFiles = false
         p.canChooseDirectories = true
         guard p.runModal() == .OK, let url = p.url else { return }
-        mediaFolder = url.path
+        useLibrary(url.path)           // [claude] P4d: a library, or a folder of works
         mediaSource = "chosen by hand"
         UserDefaults.standard.set(url.path, forKey: mediaKey)
     }
@@ -250,12 +250,104 @@ final class AppModel: ObservableObject {
 
     /// Show files in the media folder, with their dates.
     private func folderShows() -> [(path: String, modified: Double)] {
-        guard !mediaFolder.isEmpty, let l = Self.listing(mediaFolder) else { return [] }
+        guard !showsFolder.isEmpty, let l = Self.listing(showsFolder) else { return [] }
         return ShowFolder.shows(in: l.files).map { name in
-            let p = (mediaFolder as NSString).appendingPathComponent(name)
+            let p = (showsFolder as NSString).appendingPathComponent(name)
             let d = (try? FileManager.default.attributesOfItem(atPath: p)[.modificationDate] as? Date) ?? nil
             return (p, d?.timeIntervalSince1970 ?? 0)
         }
+    }
+
+    // MARK: The library: works pool and shows (v4 P4d) [claude]
+
+    /// The library's root (what the search found or Choose… picked), and
+    /// where its show files live. `mediaFolder` is its works pool: with a
+    /// `Works/` folder, that; otherwise the root itself (§ Library).
+    @Published private(set) var libraryFolder = ""
+    @Published private(set) var showsFolder = ""
+    /// The show files in the library, for the show menu.
+    @Published private(set) var showFiles: [String] = []
+    /// This Mac's work folders (with videos), for the pool.
+    @Published private(set) var ownWorks: [String] = []
+    /// True for the unsaved all-works show made when a library has no show:
+    /// only that show grows by itself when works appear (Scan, a player's
+    /// report). A saved show is curated and changes only by hand.
+    @Published private(set) var autoShow = false
+
+    /// Point the app at library `root`: its works pool and shows folder.
+    private func useLibrary(_ root: String) {
+        libraryFolder = root
+        let layout = root.isEmpty ? (works: "", shows: "")
+            : ShowFolder.layout(root: root, subfolders: Array((Self.listing(root)?.subfolders ?? [:]).keys))
+        mediaFolder = layout.works
+        showsFolder = layout.shows
+        refreshLibrary()
+    }
+
+    /// Re-read the show files and this Mac's work folders.
+    func refreshLibrary() {
+        showFiles = folderShows().map(\.path).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        ownWorks = Self.listing(mediaFolder).map { l in
+            l.subfolders.filter { !FolderScan.videos($0.value).isEmpty }.map(\.key)
+        } ?? []
+    }
+
+    /// Every work in the pool: this Mac's and every player's (reported).
+    var libraryWorks: [String] { ShowFolder.pool(own: ownWorks, inventories: Array(reported.values)) }
+
+    /// Pool works the current show doesn't have: "Add from library".
+    var worksToAdd: [String] {
+        let inShow = Set(show.works.map(\.name))
+        return libraryWorks.filter { !inShow.contains($0) }
+    }
+
+    var showName: String {
+        showPath?.deletingPathExtension().lastPathComponent ?? (autoShow ? "All works (not saved)" : "Untitled")
+    }
+
+    /// Adds pool work `name` to the show, with screens on every Mac that has
+    /// it: this Mac's from its folder, each player's from its report.
+    func addFromLibrary(_ name: String) {
+        guard !show.works.contains(where: { $0.name == name }) else { return }
+        show.works.append(Work(name: name))
+        selectedWork = show.works.count - 1
+        refillScreens()
+    }
+
+    func addAllFromLibrary() { worksToAdd.forEach(addFromLibrary) }
+
+    /// Gives the show's works screens on every Mac that has their files and
+    /// no screens set yet. Never adds works.
+    private func refillScreens() {
+        let auto = autoShow
+        autoShow = false
+        scan()
+        for inv in reported.values {
+            show = SharedShow.merge(show, with: inv, conductor: Self.thisMac, addingNewWorks: false)
+        }
+        autoShow = auto
+    }
+
+    /// "New show…": every work in the pool, in name order (Mat: what Scan
+    /// gives today), saved into the library's shows folder; then curate.
+    func newShow() {
+        let p = NSSavePanel()
+        p.allowedContentTypes = [UTType(filenameExtension: Self.showExtension) ?? .json]
+        if !showsFolder.isEmpty {
+            try? FileManager.default.createDirectory(atPath: showsFolder, withIntermediateDirectories: true)
+            p.directoryURL = URL(fileURLWithPath: showsFolder)
+        }
+        p.nameFieldStringValue = "New show.\(Self.showExtension)"
+        guard p.runModal() == .OK, let url = p.url else { return }
+        if isPlaying { stop() }
+        // Same Macs and settings, fresh playlist: the installation is the same.
+        show = Show(machines: show.machines, playlist: show.playlist, sync: show.sync)
+        autoShow = true
+        scan()
+        for inv in reported.values { show = SharedShow.merge(show, with: inv, conductor: Self.thisMac) }
+        autoShow = false
+        selectedWork = 0
+        save(to: url)
     }
 
     /// Launch: find the media folder, open the show, pick the role
@@ -263,17 +355,18 @@ final class AppModel: ObservableObject {
     private func findEverything() {
         let chosen = UserDefaults.standard.string(forKey: mediaKey)
         let app = Self.appFolder
-        mediaFolder = ShowFolder.pick(chosen: chosen, appFolder: app, home: NSHomeDirectory(), listing: Self.listing) ?? ""
-        mediaSource = mediaFolder.isEmpty ? ""
-            : mediaFolder == chosen ? "chosen by hand"
-            : mediaFolder == app ? "the folder tableauX is in"
+        let root = ShowFolder.pick(chosen: chosen, appFolder: app, home: NSHomeDirectory(), listing: Self.listing) ?? ""
+        useLibrary(root)
+        mediaSource = root.isEmpty ? ""
+            : root == chosen ? "chosen by hand"
+            : root == app ? "the folder tableauX is in"
             : "found by name"
-        NSLog("folder: %@ (%@)", mediaFolder.isEmpty ? "none found" : mediaFolder, mediaSource)
+        NSLog("folder: %@ (%@); works in %@", root.isEmpty ? "none found" : root, mediaSource, mediaFolder)
 
         let shows = folderShows()
         if let path = ShowFolder.showToOpen(last: UserDefaults.standard.string(forKey: lastShowKey),
-                                            folder: mediaFolder.isEmpty ? nil : mediaFolder,
-                                            folderChosen: mediaFolder == chosen, folderShows: shows),
+                                            folder: showsFolder.isEmpty ? nil : showsFolder,
+                                            folderChosen: root == chosen, folderShows: shows),
            FileManager.default.fileExists(atPath: path) {
             open(URL(fileURLWithPath: path))
         }
@@ -290,9 +383,12 @@ final class AppModel: ObservableObject {
             mode = !shows.isEmpty ? .conductor : mediaFolder.isEmpty ? .standalone : .player
             NSLog("folder: role %@, from the folder", mode.rawValue)
         }
-        // A conductor or standalone show opened with no works yet: fill it
-        // from the folder, so a folder of works plays without a Scan.
-        if mode != .player, show.works.isEmpty, !mediaFolder.isEmpty { scan() }
+        // No show opened (a fresh library): the all-works show, unsaved, so
+        // a folder of works plays without any setup (§ Library).
+        if mode != .player, showPath == nil, show.works.isEmpty, !mediaFolder.isEmpty {
+            autoShow = true
+            scan()
+        }
     }
 
     /// Scans the media folder: each subfolder is a work, its videos go on
@@ -323,9 +419,13 @@ final class AppModel: ObservableObject {
             let extra = FolderScan.assign(folder: folder, files: videos, displays: displays.count, firstScreen: firstScreen).leftOver
             if !extra.isEmpty { left[folder] = extra }
         }
+        // [claude] P4d: only the unsaved all-works show gains works here; a
+        // saved show is curated, and new folders wait in the library pool.
         show.works = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: displays.count, folders: inventory)],
-                                         firstScreens: [name: firstScreen])
-        leftOver = left
+                                         firstScreens: [name: firstScreen], addingNewWorks: autoShow)
+        let inShow = Set(show.works.map(\.name))
+        leftOver = left.filter { inShow.contains($0.key) }
+        refreshLibrary()
         lastError = nil
         NSLog("scan: %d work(s) in %@", inventory.count, mediaFolder)
         fillNewDisplays()
@@ -411,7 +511,9 @@ final class AppModel: ObservableObject {
         let showName = showPath?.deletingPathExtension().lastPathComponent ?? "Untitled"
         guard let dir = chooseCollectFolder() else { return }
         let root = dir.appendingPathComponent(Collect.uniqueName(showName, taken: Self.namesIn(dir)))
-        collect(Array(show.works.indices), into: root, showFile: "\(showName).\(Self.showExtension)")
+        // [claude] P4d: a library of one show: Works/ and Shows/ (§ Library).
+        collect(Array(show.works.indices), into: root, worksIn: ShowFolder.worksName,
+                showFile: "\(ShowFolder.showsName)/\(showName).\(Self.showExtension)")
     }
 
     /// Copies this Mac's files for one work into a folder named after it:
@@ -438,7 +540,7 @@ final class AppModel: ObservableObject {
     /// Plans the copies (PlayerCore's Collect, a pure function), checks them
     /// against the disk, then copies OFF THE MAIN THREAD: gigabytes of video
     /// take minutes, and the setup window must keep redrawing meanwhile.
-    private func collect(_ indices: [Int], into root: URL, showFile: String?) {
+    private func collect(_ indices: [Int], into root: URL, worksIn: String? = nil, showFile: String?) {
         guard collecting == nil, let name = machineName else { return }
         let plan = Collect.plan(works: indices.map { show.works[$0] }, machine: name, resolve: resolve,
                                 takenFolders: Self.namesIn(root), firstScreen: firstScreen)
@@ -465,12 +567,16 @@ final class AppModel: ObservableObject {
             do {
                 try fm.createDirectory(at: root, withIntermediateDirectories: true)
                 for (n, c) in copies.enumerated() {
-                    let dest = root.appendingPathComponent(c.dest)
+                    let dest = (worksIn.map { root.appendingPathComponent($0) } ?? root).appendingPathComponent(c.dest)
                     try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try fm.copyItem(atPath: c.source, toPath: dest.path)
                     await MainActor.run { self.collecting = "Collecting \(n + 1) of \(copies.count) files…" }
                 }
-                if let showFile, let showData { try showData.write(to: root.appendingPathComponent(showFile)) }
+                if let showFile, let showData {
+                    let url = root.appendingPathComponent(showFile)
+                    try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try showData.write(to: url)
+                }
             } catch {
                 failure = "Collecting stopped: \(error.localizedDescription) The files copied so far are in \(root.path)."
             }
@@ -705,7 +811,9 @@ final class AppModel: ObservableObject {
             NSLog("link: inventory from %@: %d folder(s), %d display(s)", inv.machine, inv.folders.count, inv.displays)
             // Folding it in changes the show, whose didSet shares it again,
             // now with this player's files and lengths in it.
-            show = SharedShow.merge(show, with: inv, conductor: Self.thisMac)
+            // P4d: a player's new folders join the show only while it is
+            // the unsaved all-works show; otherwise they wait in the pool.
+            show = SharedShow.merge(show, with: inv, conductor: Self.thisMac, addingNewWorks: autoShow)
             scheduleShare()                  // lengths may change even if the show doesn't
         case .report(let machine, let blocking):
             players[id, default: PlayerLink()].machine = machine
@@ -1100,12 +1208,27 @@ final class AppModel: ObservableObject {
 
     func open(_ url: URL) {
         do {
-            show = try ShowFile.decode(Data(contentsOf: url))
+            let opened = try ShowFile.decode(Data(contentsOf: url))
+            // [claude] P4d: switching shows mid-performance would leave the
+            // old show's players on screen; stop first.
+            if isPlaying { stop() }
+            show = opened
             showPath = url
+            autoShow = false
             selectedWork = 0
             leftOver = [:]
             UserDefaults.standard.set(url.path, forKey: lastShowKey)
             refreshDisplays()
+            // [claude] P4d: on a conductor, the players already connected
+            // fold into the newly opened show (their machines and screens,
+            // never new works); the show's didSet then sends it, so every
+            // player follows the switch.
+            if mode == .conductor {
+                for inv in reported.values {
+                    show = SharedShow.merge(show, with: inv, conductor: Self.thisMac, addingNewWorks: false)
+                }
+            }
+            refreshLibrary()
             // Only this Mac's files: the other machines' paths are on their disks.
             loadAllInfo()
         } catch {
@@ -1116,14 +1239,25 @@ final class AppModel: ObservableObject {
     func saveDialog() {
         let p = NSSavePanel()
         p.allowedContentTypes = [UTType(filenameExtension: Self.showExtension) ?? .json]
+        // [claude] P4d: shows are kept in the library's shows folder.
+        if !showsFolder.isEmpty {
+            try? FileManager.default.createDirectory(atPath: showsFolder, withIntermediateDirectories: true)
+            p.directoryURL = URL(fileURLWithPath: showsFolder)
+        }
         // Saving an old .msshow offers the same name with the new extension.
-        let base = showPath?.deletingPathExtension().lastPathComponent ?? "Untitled"
+        let base = showPath?.deletingPathExtension().lastPathComponent ?? (autoShow ? "All works" : "Untitled")
         p.nameFieldStringValue = "\(base).\(Self.showExtension)"
         guard p.runModal() == .OK, let url = p.url else { return }
+        save(to: url)
+    }
+
+    private func save(to url: URL) {
         do {
             try ShowFile.encode(show).write(to: url)
             showPath = url
+            autoShow = false            // saved = curated (§ Library)
             UserDefaults.standard.set(url.path, forKey: lastShowKey)
+            refreshLibrary()
         } catch {
             lastError = "Couldn't save: \(error)"
         }

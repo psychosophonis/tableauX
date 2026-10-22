@@ -14,6 +14,7 @@ struct SetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            ShowRow(model: model)
             MediaRow(model: model)
             PlaylistList(model: model)
             Divider()
@@ -204,6 +205,33 @@ private struct RemotePanelRow: View {
     private var info: InventoryFile? { panel.file.flatMap { f in files.first(where: { $0.path == f })?.file } }
 }
 
+/// [claude] P4d: which show is open, and switching between the library's
+/// shows (§ Library: works and shows). On a conductor, switching sends the
+/// new show to every player; on a player the menu is off (it follows).
+private struct ShowRow: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack {
+            Text("Show:").font(.headline)
+            Menu(model.showName) {
+                ForEach(model.showFiles, id: \.self) { path in
+                    Button((path as NSString).lastPathComponent.replacingOccurrences(of: ".\(AppModel.showExtension)", with: "")) {
+                        model.open(URL(fileURLWithPath: path))
+                    }
+                }
+                if !model.showFiles.isEmpty { Divider() }
+                Button("New show…") { model.newShow() }
+                Button("Open another…") { model.openDialog() }
+            }
+            .frame(maxWidth: 360)
+            .disabled(model.mode == .player)
+            .help("Shows in this library. A new show starts with every work; remove, add and reorder from there.")
+            Spacer()
+        }
+    }
+}
+
 /// [claude] This Mac's media folder and the Scan button (§ v4 › Getting
 /// works in). A setting of this Mac, not of the show, like the mode.
 private struct MediaRow: View {
@@ -211,19 +239,20 @@ private struct MediaRow: View {
 
     var body: some View {
         HStack {
-            Text("Media folder:")
+            Text("Library:")
             // [claude] P4b: say where the folder came from, or where it was
             // looked for, so a Mac that found nothing says what to do.
-            Text(model.mediaFolder.isEmpty
-                 ? "no \(ShowFolder.name) folder found (looked beside the app, and in your home folder, Movies and Desktop)"
-                 : model.mediaFolder)
-                .foregroundStyle(model.mediaFolder.isEmpty ? .secondary : .primary)
+            // P4d: it is a library now (Works/ and Shows/, or works directly).
+            Text(model.libraryFolder.isEmpty
+                 ? "no \(ShowFolder.name) folder found (looked in and beside the app's folder, and in your home folder, Movies and Desktop)"
+                 : model.libraryFolder)
+                .foregroundStyle(model.libraryFolder.isEmpty ? .secondary : .primary)
                 .lineLimit(1).truncationMode(.head)
-                .help(model.mediaFolder.isEmpty ? "" : "\(model.mediaFolder): \(model.mediaSource)")
+                .help(model.libraryFolder.isEmpty ? "" : "\(model.libraryFolder): \(model.mediaSource). Works: \(model.mediaFolder)")
             Spacer()
             Button("Choose…") { model.chooseMediaFolder() }
             Button("Scan") { model.scan() }.disabled(model.mediaFolder.isEmpty)
-                .help("Each subfolder is a work; its videos go on the displays in name order.")
+                .help("Re-read the library's works. Files go on screens by their _N number, else in name order. Only the unsaved all-works show gains new works; add them to a saved show with Add from library.")
             Button("Import folder…") { model.importFolder() }
                 .disabled(model.mode == .player)      // a player's works come from the conductor
                 .help("Add works from a folder anywhere, linked where they are (not copied). The folder's own videos are one work; each folder inside it is another.")
@@ -262,6 +291,7 @@ private struct PlaylistList: View {
                             Button("↑") { model.moveWork(w, by: -1) }.disabled(w == 0)
                             Button("↓") { model.moveWork(w, by: 1) }.disabled(w == model.show.works.count - 1)
                             Button("Remove") { model.removeWork(w) }
+                                .help("Remove from this show. The work's files stay in the library.")
                         }
                         .disabled(model.mode == .player)
                         Button("Collect…") { model.collectWork(w) }.disabled(model.collecting != nil)
@@ -274,6 +304,20 @@ private struct PlaylistList: View {
                 .background(w == model.selectedWork ? Color.accentColor.opacity(0.12) : .clear)
             }
             HStack {
+                // [claude] P4d: works come from the library pool; a work in
+                // several shows is still one folder.
+                Menu("Add from library") {
+                    ForEach(model.worksToAdd, id: \.self) { name in
+                        Button(name) { model.addFromLibrary(name) }
+                    }
+                    if model.worksToAdd.count > 1 {
+                        Divider()
+                        Button("All \(model.worksToAdd.count) works") { model.addAllFromLibrary() }
+                    }
+                }
+                .fixedSize()
+                .disabled(model.mode == .player || model.worksToAdd.isEmpty)
+                .help("Works in the library (on any Mac) that this show doesn't have yet.")
                 Button("Add work") { model.addWork() }
                     .help("A work set up by hand: choose its files below.")
                     .disabled(model.mode == .player)

@@ -429,6 +429,43 @@ release 0.3 (Mat: "move to three"). Builds on v3. -->
   whose files on this Mac come from several folders was set by hand and is
   left alone.
 
+### Library: works and shows (Mat, 2026-10-22)
+Aim (Mat): a gallery with many shows switches between them inside one app,
+and works can move between shows.
+- **Works are a pool; a show is a playlist that names some of them.** A
+  library folder (the `tableauX` folder found by the search in § Zero
+  setup) holds:
+  ```
+  tableauX/
+    Works/   one folder per work, holding this Mac's files for it
+    Shows/   show files (.tableaux), playlists only; conductor only
+  ```
+  A work in several shows is one folder; moving a work between shows is a
+  playlist edit, no files move. Per-show settings (repeat, shorter,
+  screens, audio, scaling) live in each show file.
+- **A folder without `Works/`** (today's layout: works directly inside,
+  any show files beside them) is read as a library whose works pool and
+  shows folder are that folder. Existing folders keep working.
+- **Switching shows:** a menu at the top of setup lists the show files in
+  `Shows/`; choosing one opens it. A player needs only `Works/`: the
+  conductor sends whichever show is current, so players follow a switch
+  with no folder change and no visit.
+- **New show** starts with every work in the pool, in name order (what
+  Scan gives today), saved into `Shows/`; works are then removed, added
+  ("Add from library") and reordered. With no show at all (a fresh
+  library), the app makes that all-works show itself, unsaved, so a folder
+  of works still plays with no setup.
+- **Scan** refreshes the pool (this Mac's `Works/`, plus every player's
+  reported works). It adds works to the show only while the show is the
+  unsaved all-works show; a saved show is curated and changes only by
+  hand. The same holds for works a player reports.
+- **Collect show** makes a library of one show: `Works/` with that show's
+  works, `Shows/<show>.tableaux`.
+- [claude] **Later, possible (Mat):** a show described by a plain text file
+  in `Shows/` listing work names one per line, for shows assembled without
+  the app. Not built: it would be a second description of a show to keep
+  in step with the show file.
+
 ### Zero setup (Mat, 2026-10-22)
 Aim (Mat): "minimise any step that requires going back to a client… send a
 copy of tableauX and a folder to the client and have it, as much as
@@ -436,7 +473,8 @@ possible, just work."
 - **The folder is called `tableauX` (Mat).** The media folder, first match:
   a folder chosen with Choose… (saved; a deliberate choice wins); **the
   folder the app is in (Mat)**, if it holds a show file or a folder of
-  videos; then `~/tableauX`, `~/Movies/tableauX`, `~/Desktop/tableauX`
+  videos; a `tableauX` folder beside the app (Mat's layout, 0.3.9); then
+  `~/tableauX`, `~/Movies/tableauX`, `~/Desktop/tableauX`
   [claude: home and Movies first, as macOS asks before an app reads the
   Desktop]. A folder found by looking is looked for again at each launch.
 - [claude] App Translocation: a quarantined app opened where it was

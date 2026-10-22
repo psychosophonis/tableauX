@@ -20,15 +20,47 @@ public enum ShowFolder {
     public static func isShowFolder(files: [String], subfolders: [String: [String]]) -> Bool {
         files.contains { ($0 as NSString).pathExtension.lowercased() == showExtension }
             || subfolders.contains { !$0.key.hasPrefix(".") && !FolderScan.videos($0.value).isEmpty }
+            || subfolders.keys.contains { $0.caseInsensitiveCompare(worksName) == .orderedSame
+                                          || $0.caseInsensitiveCompare(showsName) == .orderedSame }
+    }
+
+    // MARK: The library (P4d, § v4 › Library: works and shows) [claude]
+
+    public static let worksName = "Works"
+    public static let showsName = "Shows"
+
+    /// Where a library keeps its works and its show files. With a `Works`
+    /// folder: works in `Works/`, shows in `Shows/`. Without one (the layout
+    /// before libraries: works directly inside, show files beside them):
+    /// both are the root, so every existing folder keeps working.
+    public static func layout(root: String, subfolders: [String]) -> (works: String, shows: String) {
+        guard let w = subfolders.first(where: { $0.caseInsensitiveCompare(worksName) == .orderedSame }) else {
+            return (root, root)
+        }
+        let s = subfolders.first(where: { $0.caseInsensitiveCompare(showsName) == .orderedSame }) ?? showsName
+        return ((root as NSString).appendingPathComponent(w), (root as NSString).appendingPathComponent(s))
+    }
+
+    /// Every work in the pool: this Mac's work folders and every work a
+    /// player reported, once each, in name order. "Add from library"
+    /// offers the ones the current show doesn't have.
+    public static func pool(own: [String], inventories: [Inventory]) -> [String] {
+        Set(own + inventories.flatMap { $0.folders.keys }).filter { !$0.hasPrefix(".") }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     /// Where to look, in order, after a folder chosen by hand: the app's own
-    /// folder, then `tableauX` in the home folder, Movies and the Desktop.
-    /// Home and Movies first because macOS asks permission before an app
-    /// reads the Desktop; a folder found without asking is a step saved.
+    /// folder, a `tableauX` folder beside the app (Mat's layout, 2026-10-22:
+    /// the app and a tableauX folder side by side), then `tableauX` in the
+    /// home folder, Movies and the Desktop. Home and Movies before the
+    /// Desktop because macOS asks permission before an app reads the
+    /// Desktop; a folder found without asking is a step saved.
     public static func candidates(appFolder: String?, home: String) -> [(path: String, mustLookLikeAShow: Bool)] {
         var out: [(String, Bool)] = []
-        if let appFolder { out.append((appFolder, true)) }
+        if let appFolder {
+            out.append((appFolder, true))
+            out.append(((appFolder as NSString).appendingPathComponent(name), false))
+        }
         for parent in ["", "Movies", "Desktop"] {
             let p = parent.isEmpty ? home : (home as NSString).appendingPathComponent(parent)
             out.append(((p as NSString).appendingPathComponent(name), false))

@@ -217,12 +217,17 @@ public enum PlaylistMerge {
     ///
     /// [claude] `firstScreens`: each Mac's first tableau screen number, for
     /// numbered files ("_N", FolderScan.assign); a Mac not listed starts at 1.
-    public static func merge(_ works: [Work], with inventories: [Inventory], firstScreens: [String: Int] = [:]) -> [Work] {
+    ///
+    /// [claude] `addingNewWorks` false (P4d): a SAVED show is curated, so
+    /// folders it doesn't name stay in the library pool and only the show's
+    /// own works get screens. True for the unsaved all-works show.
+    public static func merge(_ works: [Work], with inventories: [Inventory], firstScreens: [String: Int] = [:],
+                             addingNewWorks: Bool = true) -> [Work] {
         var result = works
         let known = Set(works.map(\.name))
         let newNames = Set(inventories.flatMap { $0.folders.keys }).subtracting(known)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        result += newNames.map { Work(name: $0) }
+        if addingNewWorks { result += newNames.map { Work(name: $0) } }
         for i in result.indices {
             for inv in inventories where result[i].screens[inv.machine] == nil {
                 guard let files = inv.folders[result[i].name] else { continue }

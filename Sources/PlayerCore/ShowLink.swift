@@ -98,7 +98,9 @@ public enum SharedShow {
     /// end that, and the conductor would lose its own part. So the
     /// conductor first ADOPTS the lone entry, unless it belongs to the
     /// player now joining (then the show was that player's).
-    public static func merge(_ show: Show, with inventory: Inventory, conductor: String) -> Show {
+    /// `addingNewWorks`: see PlaylistMerge.merge (false for a saved show).
+    public static func merge(_ show: Show, with inventory: Inventory, conductor: String,
+                             addingNewWorks: Bool = true) -> Show {
         var s = show
         if s.machines.count == 1, let lone = s.machines.first?.name,
            lone != conductor, lone != inventory.machine {
@@ -114,7 +116,8 @@ public enum SharedShow {
         }
         // The machine is in the show now, so its place in the tableau is known.
         let first = firstScreen(s, of: inventory.machine)
-        s.works = PlaylistMerge.merge(s.works, with: [inventory], firstScreens: [inventory.machine: first])
+        s.works = PlaylistMerge.merge(s.works, with: [inventory], firstScreens: [inventory.machine: first],
+                                      addingNewWorks: addingNewWorks)
         for w in s.works.indices {
             let set = s.works[w].screens[inventory.machine] ?? []
             guard let folder = FolderScan.folder(of: set, work: s.works[w].name),

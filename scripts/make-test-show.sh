@@ -63,28 +63,37 @@ done
 # named "Test": a one-machine show opens on any Mac, and a conductor adopts
 # it as its own when the first player joins.
 panels() { printf '[{"audio":false,"file":"%s/1.mp4","scaling":"fit"},{"audio":false,"file":"%s/2.mp4","scaling":"fit"},{"audio":false,"file":"%s/3.mp4","scaling":"fit"}]' "$1" "$1" "$1"; }
-cat > "$work/Test show.tableaux" <<EOF
+red="{\"name\": \"1 Red\", \"repeat\": 1, \"shorter\": \"black\", \"screens\": {\"Test\": $(panels "1 Red")}}"
+blue="{\"name\": \"2 Blue\", \"repeat\": 1, \"shorter\": \"black\", \"screens\": {\"Test\": $(panels "2 Blue")}}"
+# show <file> <works JSON>
+show() {
+  cat > "$work/$1" <<EOF
 {
   "version": 3,
   "machines": [{"name": "Test", "displays": 3}],
-  "works": [
-    {"name": "1 Red", "repeat": 1, "shorter": "black", "screens": {"Test": $(panels "1 Red")}},
-    {"name": "2 Blue", "repeat": 1, "shorter": "black", "screens": {"Test": $(panels "2 Blue")}}
-  ],
+  "works": [$2],
   "playlist": {"gap": 3, "loop": true},
   "sync": {"tolerance": 3, "grace": 5},
   "playOnLaunch": false
 }
 EOF
+}
+# [claude] P4d: two shows over the same two works, in opposite orders, so
+# switching shows in the app (and players following) can be seen at once.
+show "Test show.tableaux" "$red, $blue"
+show "Blue then red.tableaux" "$blue, $red"
 
+# The library layout (docs/architecture.md § v4 › Library): Works/ holds the
+# videos, Shows/ the show files (the conductor's folder only).
 kit="$work/kit"
 for role in conductor player; do
   dir="$kit/Test ${role}"
-  mkdir -p "$dir"
+  mkdir -p "$dir/Works"
   ditto "$app" "$dir/tableauX.app"            # ditto keeps the signature intact
-  cp -R "$media/1 Red" "$media/2 Blue" "$dir/"
+  cp -R "$media/1 Red" "$media/2 Blue" "$dir/Works/"
 done
-cp "$work/Test show.tableaux" "$kit/Test conductor/"
+mkdir -p "$kit/Test conductor/Shows"
+cp "$work/Test show.tableaux" "$work/Blue then red.tableaux" "$kit/Test conductor/Shows/"
 
 rm -f "dist/tableauX-${version}-test.zip"
 (cd "$kit" && ditto -c -k --sequesterRsrc . "../test.zip")

@@ -109,6 +109,7 @@ Risk order: the stages that could kill the idea come first.
 | P4a | Conductor sets every Mac's screens from their reported files | Mat: "work entirely on the conductor" | **built 2026-10-22** `[claude]` (build 0.3.5); loopback screenshot found and fixed a bug (one-machine show lost the conductor's part when a player joined; 2 new tests) |
 | P4b | Zero setup: `tableauX` folder (beside the app first), role from the folder, Bonjour discovery | Mat: send the app + a folder and it "just works" | **built 2026-10-22** `[claude]` (build 0.3.6): 6 new tests; run on this Mac (see notes); Bonjour on the uni network and translocation on a fresh Mac untested |
 | P4c | Test show packaged with the app (Mat: "for me, and for testing") | `scripts/make-test-show.sh` | **built 2026-10-22** `[claude]`: `dist/tableauX-0.3.6-test.zip` (10 MB): "Test conductor" + "Test player" folders; 2 works (red 12 s, blue 8 s) × 3 screens, count = seconds.frame, white flash each second. Conductor kit opened on this Mac: role and show from its folder, Play enabled |
+| P4d | Library: Works/ pool + Shows/ playlists; show menu; New show (all works); Add from library; conductor switches, players follow | Mat: many shows in one app, works movable between shows | **built 2026-10-22** `[claude]` (build 0.3.10): 5 new tests; kit run (see notes) |
 | P3 | Network: TCP channel; inventories → merged playlist → players; state with work index; file check | T16, T17 | |
 | P4 | Setup: playlist editor, folder import, per-work settings | a class set up in minutes | |
 | P5 | Two-Mac playlist run; 8 h soak on the Mac mini (T18) | release 0.3 | |
@@ -303,6 +304,17 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   new displays and Import honour it; Collect names copies for their screens
   when a scan wouldn't restore them. 10 new tests (133); 3 old Collect
   expectations changed on purpose (they now number). Offset mutant caught.
+- 0.3.9 (2026-10-22): fix from Mat's run of 0.3.8. Layout
+  testshow/{tableauX.app, tableauX/{work1..3}}: no folder was found (the
+  search didn't look for tableauX beside the app), so the test kit's show
+  reopened. Now a tableauX folder beside the app is searched second.
+- 0.3.10 (2026-10-22): P4d library. Kit now in the library layout
+  (Works/ + Shows/ with two shows over the same works). Run: the kit
+  conductor found its library (works in Works/), became Conductor, opened
+  a show; a fake player reporting an extra work "Lee" left the saved show
+  at its 2 works (Lee offered in Add from library) and got screens for the
+  work it shares. Not run: switching shows by hand (needs a click), New
+  show, Collect into the library layout.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

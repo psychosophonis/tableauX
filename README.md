@@ -46,32 +46,43 @@ The app isn't notarised by Apple, so macOS blocks it the first time:
 If a display is connected, removed or rearranged during playback, the show
 stops and returns to setup.
 
-## A show on several Macs, with no setup on each Mac
+## The library: works and shows, on one Mac or several
 
-<!-- [claude] v4 P4b, from build 0.3.6. -->
-Put the app and the videos in one folder (called **tableauX** if it isn't
-the folder the app is in), one folder per work inside it, holding that
-Mac's files for the work. End each file's name with its **screen number**,
-`_1`, `_2`, `_3`…, counted across the whole tableau: a six-screen piece on
-two three-display Macs is `_1`–`_3` on the first Mac and `_4`–`_6` on the
-second. A missing number leaves that screen black. Files without a number
-go on the free screens in name order.
+<!-- [claude] v4 P4b–P4d, from build 0.3.10. -->
+tableauX keeps a **library**: a folder called **tableauX** (in the folder the
+app is in, beside the app, or in your home folder, Movies or the Desktop):
 
 ```
 tableauX/
-  tableauX.app
-  Class show.tableaux     ← only in the conductor's folder
-  Smith/Smith_1.mp4, Smith_2.mp4
-  Jones/Jones_1.mov
+  Works/                       one folder per work, this Mac's files for it
+    Smith/Smith_1.mp4, Smith_2.mp4
+    Jones/Jones_1.mov
+  Shows/                       show files: playlists of works (conductor only)
+    Graduate show.tableaux
+    Night screening.tableaux
 ```
 
-Copy a folder like this to each Mac (Collect show… on each Mac makes one)
-and open the app. It finds its videos in the folder it is in (or a
-`tableauX` folder in the home folder, Movies or the Desktop) and works out
-its role. A folder **with** a show file runs as the **Conductor**; one
-without runs as a **Player**, finds the conductor on the network by itself,
-sends it a list of its videos, and plays its part. Arrange every Mac's
-screens from the conductor's setup window.
+- **A work is one folder**, however many shows it is in. A show is a
+  playlist naming some works, with its own settings for each.
+- End each file's name with its **screen number**, `_1`, `_2`, `_3`…,
+  counted across the whole tableau: a six-screen piece on two three-display
+  Macs is `_1`–`_3` on the first Mac and `_4`–`_6` on the second. A missing
+  number leaves that screen black; files without a number go on the free
+  screens in name order.
+- **Switch shows** with the Show menu at the top of setup. **New show…**
+  starts with every work; **Remove** and **Add from library** curate it
+  (no files move). A library with no show yet plays all its works.
+- **Several Macs:** each Mac's library holds its own files in `Works/`; only
+  the conductor has `Shows/`. A Mac with show files runs as the
+  **Conductor**; one without runs as a **Player**, finds the conductor on
+  the network by itself, sends it a list of its works, and plays whichever
+  show the conductor has open, switching when it switches. Arrange every
+  Mac's screens from the conductor's setup window.
+- **Collect show…** makes a library of one show (`Works/` + `Shows/`) to
+  archive or hand on.
+
+A folder of works without `Works/` (works directly inside, any show file
+beside them) also works, as a library of its own.
 
 Each Mac still asks twice the first time: **Open Anyway** (see First launch)
 and **Allow** when macOS asks about finding devices on the local network.
@@ -81,8 +92,8 @@ instead.
 ### Test show
 
 `tableauX-<version>-test.zip` (made by `scripts/make-test-show.sh`) holds
-two ready folders: **Test conductor** (with a show file) and **Test player**
-(without). Copy the first to one Mac and the second to the others, and open
+two ready libraries: **Test conductor** (with two shows, the same works in
+opposite orders, to try switching) and **Test player** (works only). Copy the first to one Mac and the second to the others, and open
 the app in each. Two works, red then blue, each a numbered count
 (`seconds.frame`, 30 frames a second) with a white block that flashes on
 every whole second: screens in step show the same number and flash

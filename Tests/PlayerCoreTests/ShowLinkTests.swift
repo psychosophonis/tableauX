@@ -76,6 +76,18 @@ final class SharedShowTests: XCTestCase {
         XCTAssertEqual(s.works[0].screens["A"]?.map(\.file), ["Smith/a.mp4"])
     }
 
+    /// P4d: a saved show is curated. A player's folders the show doesn't name
+    /// stay in the pool; works the show does name get the player's screens.
+    func testASavedShowGainsScreensButNotWorks() {
+        let s = Show(machines: [Machine(name: "A", displays: 1)], works: [Work(name: "Smith")])
+        let m = SharedShow.merge(s, with: inv("B", 1, ["Smith": [("1.mp4", 5)], "Lee": [("1.mp4", 5)]]),
+                                 conductor: "A", addingNewWorks: false)
+        XCTAssertEqual(m.works.map(\.name), ["Smith"])
+        XCTAssertEqual(m.works[0].screens["B"]?.map(\.file), ["Smith/1.mp4"])
+        let all = SharedShow.merge(s, with: inv("B", 1, ["Lee": [("1.mp4", 5)]]), conductor: "A")
+        XCTAssertEqual(all.works.map(\.name), ["Smith", "Lee"])                         // the all-works show grows
+    }
+
     func testHandSetScreensAreKeptAndNewDisplaysFill() {
         let set = [PanelConfig(file: "Smith/3.mp4", audio: true)]
         var s = Show(machines: [Machine(name: "A")], works: [Work(name: "Smith", screens: ["B": set])])
