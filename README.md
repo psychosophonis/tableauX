@@ -32,16 +32,22 @@ The app isn't notarised by Apple, so macOS blocks it the first time:
 
 ## Use
 
-1. In the setup window, **Choose…** a video for each display (or leave one
-   empty to keep it black). Pick **Fit** (whole picture, black bars if the
-   shapes differ) or **Fill** (covers the display, crops the overflow).
-   Each row shows the scale factor: **2×** for an HD file on a 4K display is a
-   clean doubling; anything else means the picture is interpolated.
-2. Press **Play**. All displays go black, then start together.
-3. During playback: **Space** pauses and resumes, **Esc** stops and returns
-   to setup.
-4. **Save…** keeps the arrangement; tick **Play on launch** to have it start
-   by itself when the app opens (for unattended installations).
+tableauX has two modes, switched at the top of its window:
+
+- **Compose**: the window itself. Set up the library, the shows and each
+  display: **Choose…** a video (or leave it empty to keep it black), and
+  **Fit** (whole picture, black bars if the shapes differ) or **Fill**
+  (covers the display, crops the overflow). Each row shows the scale
+  factor: **2×** for an HD file on a 4K display is a clean doubling.
+  **Preview** plays the show in a window, every screen as a tile.
+- **Present**: the show full screen on the real displays. All displays go
+  black, then start together. **Space** pauses and resumes, **→ / ←**
+  change work, **Esc** returns to Compose.
+
+A show saves itself as you change it, once it has a name (New show…, or
+**Save…** for the automatic "All works" show). **Save As…** makes a copy
+under a new name. Tick **Open in Present mode** to have the show start by
+itself when the app opens (for unattended installations).
 
 If a display is connected, removed or rearranged during playback, the show
 stops and returns to setup.

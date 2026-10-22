@@ -341,6 +341,16 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   count (1), leaving _2/_3 unused. Now a new show (and a player joining)
   is sized by what its works need. Run against a link to Mat's works
   folder with 1 display: 3 works, preview of 3 screens. 2 new tests.
+- 0.3.15 (2026-10-22): Compose / Present (Mat's words): Preview and the
+  [Compose | Present] switch in the top bar, "Present (1 of 3 displays)"
+  when short of displays, "Open in Present mode" for playOnLaunch.
+  Screenshot checked. The check run's window took keyboard focus while Mat
+  was typing elsewhere and his keystrokes renamed a work in that (unsaved,
+  temporary) show; fixed: nothing is focused when the window opens.
+- 0.3.16 (2026-10-22): autosave for named shows; Save… → Save As… (Mat was
+  asked to name a show New show… had already saved). Not run by hand yet
+  (needs edits in the window): to check, edit a named show, wait 2 s,
+  switch shows and back.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

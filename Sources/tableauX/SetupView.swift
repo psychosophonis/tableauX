@@ -70,23 +70,30 @@ struct SetupView: View {
             ProblemList(problems: model.problems, lastError: model.lastError)
             HStack {
                 Button("Open…") { model.openDialog() }.keyboardShortcut("o")
-                Button("Save…") { model.saveDialog() }.keyboardShortcut("s")
-                Toggle("Play on launch", isOn: $model.show.playOnLaunch)
+                // [claude] A named show saves itself (autosave); this makes a
+                // copy under a new name. Only the unsaved all-works show
+                // needs naming once: then it reads "Save…".
+                Button(model.showPath == nil ? "Save…" : "Save As…") { model.saveDialog() }.keyboardShortcut("s")
+                    .help(model.showPath == nil ? "Name this show and save it into the library's Shows folder. From then on it saves itself."
+                                                : "Changes save themselves. Save As… makes a copy under a new name.")
+                // [claude] Compose/Present (Mat): the show file's playOnLaunch,
+                // named for what it does. For gallery Macs.
+                Toggle("Open in Present mode", isOn: $model.show.playOnLaunch)
+                    .help("When tableauX opens with this show, it starts presenting full screen by itself: for gallery Macs.")
                 Spacer()
-                // [claude] P4e: the whole tableau in one window, from this Mac's files.
-                Button("Preview") { model.preview() }
-                    .disabled(model.isPlaying || model.show.works.isEmpty)
-                    .help("Play the show in one window: every screen of every Mac as a tile, a row per Mac, from the files on this Mac. For checking order, timing and assignment; a laptop may not decode a whole tableau smoothly.")
-                Button("Play") { model.play() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(model.isPlaying || !model.problems.blocking.isEmpty)
             }
-            Text("During playback: Space pauses or resumes, → next work, ← previous work, Esc stops.")
+            Text("Presenting or previewing: Space pauses or resumes, → next work, ← previous work, Esc returns to Compose.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding()
         .frame(minWidth: 640)
-        .onAppear { model.launched() }
+        .onAppear {
+            model.launched()
+            // [claude] Nothing focused when the window opens: SwiftUI focused
+            // the first text field (the work's name), so typing meant for
+            // another app renamed a work (seen 2026-10-22).
+            DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
+        }
     }
 }
 
@@ -255,7 +262,37 @@ private struct ShowRow: View {
             .disabled(model.mode == .player)
             .help("Shows in this library. A new show starts with every work; remove, add and reorder from there.")
             Spacer()
+            // [claude] Compose and Present (Mat, 2026-10-22). This window is
+            // Compose; Preview plays the whole tableau in a window; Present
+            // plays it full screen on the real displays (Esc comes back).
+            Button("Preview") { model.preview() }
+                .disabled(model.isPlaying || model.show.works.isEmpty)
+                .help("Play the show in a window: every screen of every Mac as a tile, a row per Mac, from the files on this Mac. For checking order, timing and assignment; a laptop may not decode a whole tableau smoothly.")
+            if model.mode == .player {
+                Text("Presents when the conductor does").foregroundStyle(.secondary)
+            } else {
+                Picker("", selection: Binding(get: { model.isPlaying && !model.previewing ? 1 : 0 },
+                                              set: { if $0 == 1 { model.play() } else { model.stop() } })) {
+                    Text("Compose").tag(0)
+                    Text(presentLabel).tag(1)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .disabled(model.isPlaying || !model.problems.blocking.isEmpty)
+                .help("Present: play the show full screen on this Mac's displays (and, as Conductor, on every player). Esc returns to Compose.")
+                Button("") { model.play() }                    // Return presents, as Play did
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(model.isPlaying || !model.problems.blocking.isEmpty)
+                    .frame(width: 0).opacity(0)
+            }
         }
+    }
+
+    /// "Present", or "Present (1 of 3 displays)" when fewer are connected
+    /// than the show is designed for, so it's clear before pressing.
+    private var presentLabel: String {
+        model.displays.count < model.designDisplays
+            ? "Present (\(model.displays.count) of \(model.designDisplays) displays)" : "Present"
     }
 }
 

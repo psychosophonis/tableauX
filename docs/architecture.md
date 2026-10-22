@@ -464,12 +464,34 @@ and works can move between shows.
   reported works). It adds works to the show only while the show is the
   unsaved all-works show; a saved show is curated and changes only by
   hand. The same holds for works a player reports.
+- **A named show saves itself (Mat, 2026-10-22).** [claude] About a second
+  after the last change (debounced; written when it fires, so a show
+  replaced meanwhile can't be written into another's file); flushed before
+  switching show and on quit. "Save As…" makes a copy under a new name.
+  The unsaved all-works show is named once with "Save…"; leaving it after
+  editing it by hand asks Save… / Don't Save / Cancel. Players never save.
 - **Collect show** makes a library of one show: `Works/` with that show's
   works, `Shows/<show>.tableaux`.
 - [claude] **Later, possible (Mat):** a show described by a plain text file
   in `Shows/` listing work names one per line, for shows assembled without
   the app. Not built: it would be a second description of a show to keep
   in step with the show file.
+
+### Compose and Present (Mat, 2026-10-22)
+- **Compose** is the setup window: library, shows, screens, settings.
+  **Present** plays the show full screen on the real displays (Play); Esc
+  returns to Compose. The words are Mat's.
+- [claude] The top bar holds the Show menu, **Preview** (the tableau in a
+  window, § Preview) and the switch **[Compose | Present]**. Present's
+  label says when fewer displays are connected than designed: "Present
+  (1 of 3 displays)". Return presents. On a player the switch is replaced
+  by "Presents when the conductor does".
+- [claude] "Open in Present mode" (the show's `playOnLaunch`, renamed) is
+  for gallery Macs: tableauX opens straight into Present with that show.
+- [claude] The preview stays a separate window for now (Mat undecided:
+  it can sit on a second display); docking it in Compose is possible later.
+- [claude] Nothing has keyboard focus when the setup window opens (it
+  used to be the work's name field, which typing elsewhere could rename).
 
 ### Preview (Mat, 2026-10-22)
 Aim (Mat): "test my shows on a single screen in a kind of virtual display."

@@ -23,7 +23,10 @@ final class AppModel: ObservableObject {
     @Published var show = Show(machines: [Machine(name: AppModel.thisMac)]) {
         // [claude] P3b: a conductor's players must always have its latest
         // playlist, so every change is shared (coalesced, see scheduleShare).
-        didSet { if mode == .conductor { scheduleShare() } }
+        didSet {
+            if mode == .conductor { scheduleShare() }
+            scheduleAutosave()
+        }
     }
     @Published private(set) var media: [String: MediaInfo] = [:]     // keyed by file path
     @Published private(set) var unreadable: Set<String> = []
@@ -339,7 +342,72 @@ final class AppModel: ObservableObject {
 
     /// "New show…": every work in the pool, in name order (Mat: what Scan
     /// gives today), saved into the library's shows folder; then curate.
+    // MARK: Autosave (Mat, 2026-10-22) [claude]
+
+    private var autosaveTimer: Timer?
+    /// The all-works show as the app last built it (scan, a player's works).
+    /// If the show now differs, a person edited it, and switching away asks
+    /// before the edits are lost. Comparing with a BASELINE, rather than
+    /// flagging edits, catches every kind of edit without listing them.
+    private var autoBaseline: Show?
+    private var autoShowEdited: Bool {
+        get { autoShow && autoBaseline.map { $0 != show } == true }
+        set { if !newValue { autoBaseline = show } }
+    }
+    /// Set while the show is being REPLACED (open, New show, a player
+    /// receiving): no autosave of a show mid-replacement.
+    private var replacingShow = false
+
+    /// After the app itself changed the all-works show: that's the baseline.
+    private func markAutoBaseline() { if autoShow { autoBaseline = show } }
+
+    /// A named show saves itself about a second after the last change
+    /// (DEBOUNCED: a burst of edits is one write). The write reads the show
+    /// and its path when it FIRES, not when it was asked for, so a show
+    /// replaced meanwhile can never be written into another show's file.
+    private func scheduleAutosave() {
+        guard showPath != nil, !autoShow, mode != .player, !replacingShow else { return }
+        autosaveTimer?.invalidate()
+        autosaveTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flushAutosave() }
+        }
+    }
+
+    /// Writes a pending autosave now: before the show is replaced and when
+    /// the app quits, so an edit made just before isn't lost.
+    func flushAutosave() {
+        guard let timer = autosaveTimer else { return }
+        timer.invalidate()
+        autosaveTimer = nil
+        guard let url = showPath, !autoShow, mode != .player else { return }
+        do {
+            try ShowFile.encode(show).write(to: url)
+            NSLog("autosave: %@", url.lastPathComponent)
+        } catch {
+            lastError = "Couldn't save \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    /// Before leaving the edited all-works show: Save… / Discard / Cancel.
+    /// Returns false if the person cancelled.
+    private func confirmLeavingAutoShow() -> Bool {
+        guard autoShow, autoShowEdited else { return true }
+        let a = NSAlert()
+        a.messageText = "Save the changes to “All works”?"
+        a.informativeText = "It hasn't been saved as a show yet. Without saving, these changes are lost."
+        a.addButton(withTitle: "Save…")
+        a.addButton(withTitle: "Don't Save")
+        a.addButton(withTitle: "Cancel")
+        switch a.runModal() {
+        case .alertFirstButtonReturn: saveDialog(); return !autoShow       // saved = no longer the auto show
+        case .alertSecondButtonReturn: autoShowEdited = false; return true
+        default: return false
+        }
+    }
+
     func newShow() {
+        flushAutosave()
+        guard confirmLeavingAutoShow() else { return }
         let p = NSSavePanel()
         p.allowedContentTypes = [UTType(filenameExtension: Self.showExtension) ?? .json]
         if !showsFolder.isEmpty {
@@ -349,6 +417,7 @@ final class AppModel: ObservableObject {
         p.nameFieldStringValue = "New show.\(Self.showExtension)"
         guard p.runModal() == .OK, let url = p.url else { return }
         if isPlaying { stop() }
+        replacingShow = true
         // Same Macs and settings, fresh playlist: the installation is the same.
         show = Show(machines: show.machines, playlist: show.playlist, sync: show.sync)
         autoShow = true
@@ -358,6 +427,7 @@ final class AppModel: ObservableObject {
         autoShow = false
         selectedWork = 0
         save(to: url)
+        replacingShow = false
     }
 
     /// Launch: find the media folder, open the show, pick the role
@@ -486,6 +556,7 @@ final class AppModel: ObservableObject {
             }
             leftOver[show.works[w].name] = left.isEmpty ? nil : left
         }
+        markAutoBaseline()          // [claude] the app's change, not a person's
     }
 
     /// Reads the length etc. of every file this Mac plays, in every work.
@@ -677,6 +748,10 @@ final class AppModel: ObservableObject {
         findEverything()
         clockReady = true
         restartClock()
+        // [claude] Autosave: an edit made in the last second is written on quit.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flushAutosave() }
+        }
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateClockStatus() }
         }
@@ -845,6 +920,7 @@ final class AppModel: ObservableObject {
             // P4d: a player's new folders join the show only while it is
             // the unsaved all-works show; otherwise they wait in the pool.
             show = SharedShow.merge(show, with: inv, conductor: Self.thisMac, addingNewWorks: autoShow)
+            markAutoBaseline()               // a player's works, not a person's edit
             scheduleShare()                  // lengths may change even if the show doesn't
         case .report(let machine, let blocking):
             players[id, default: PlayerLink()].machine = machine
@@ -901,7 +977,9 @@ final class AppModel: ObservableObject {
         guard s != show || lengths != sharedLengths else { return }
         // The conductor's playlist replaces this Mac's: one show, everywhere.
         // A player's own show file isn't used in Player mode.
+        replacingShow = true
         show = s
+        replacingShow = false
         sharedLengths = lengths
         selectedWork = min(selectedWork, max(s.works.count - 1, 0))
         NSLog("link: playlist from the conductor: %d work(s)", s.works.count)
@@ -1279,6 +1357,12 @@ final class AppModel: ObservableObject {
     }
 
     func open(_ url: URL) {
+        // [claude] Autosave: the current show's last edit is written before
+        // it is replaced; an edited all-works show asks first.
+        flushAutosave()
+        guard confirmLeavingAutoShow() else { return }
+        replacingShow = true
+        defer { replacingShow = false }
         do {
             let opened = try ShowFile.decode(Data(contentsOf: url))
             // [claude] P4d: switching shows mid-performance would leave the
@@ -1328,6 +1412,9 @@ final class AppModel: ObservableObject {
             try ShowFile.encode(show).write(to: url)
             showPath = url
             autoShow = false            // saved = curated (§ Library)
+            autoShowEdited = false
+            autosaveTimer?.invalidate()
+            autosaveTimer = nil
             UserDefaults.standard.set(url.path, forKey: lastShowKey)
             refreshLibrary()
         } catch {
