@@ -33,6 +33,24 @@ struct SetupView: View {
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.1)))
             }
+            // [claude] Compose ahead, step 3: a conductor with no screens of
+            // its own drives the show from here while the other Macs present.
+            if model.isPlaying, !model.previewing, model.conductsOnly {
+                HStack(spacing: 10) {
+                    Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(.green)
+                    Text("Presenting on the other Macs · \(model.remoteStatus)").font(.headline)
+                    Spacer()
+                    Button { model.remoteSkip(forward: false) } label: { Image(systemName: "backward.end.fill") }
+                        .keyboardShortcut(.leftArrow, modifiers: []).help("Previous work (←)")
+                    Button { model.remotePause() } label: { Image(systemName: model.remoteStatus.hasPrefix("Paused") ? "play.fill" : "pause.fill") }
+                        .keyboardShortcut(.space, modifiers: []).help("Pause or resume (Space)")
+                    Button { model.remoteSkip(forward: true) } label: { Image(systemName: "forward.end.fill") }
+                        .keyboardShortcut(.rightArrow, modifiers: []).help("Next work (→)")
+                    Button("Stop") { model.stop() }.keyboardShortcut(.cancelAction).help("Stop the show everywhere (Esc)")
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.green.opacity(0.12)))
+            }
             ShowRow(model: model)
             TableauSizeRow(model: model)        // [claude] the show's display counts, for every work
             MediaRow(model: model)
@@ -105,6 +123,9 @@ private struct ShowRow: View {
                 Toggle("Start presenting when tableauX opens", isOn: $model.show.playOnLaunch)
                 Button("Export show as a library…") { model.exportShow() }
                     .disabled(model.collecting != nil || model.show.works.isEmpty)
+                // [claude] Compose ahead, step 4: a folder per Mac, ready to copy.
+                Button("Make kits for each Mac…") { model.makeKits() }
+                    .disabled(model.collecting != nil || model.show.works.isEmpty || model.show.machines.count < 2)
             }
             .frame(maxWidth: 360)
             .disabled(model.mode == .player)
@@ -132,7 +153,8 @@ private struct ShowRow: View {
     /// "Present", or "Present (1 of 3 displays)" when fewer are connected
     /// than the show is designed for, so it's clear before pressing.
     private var presentLabel: String {
-        model.displays.count < model.designDisplays
+        if model.conductsOnly { return "Present (on the other Macs)" }
+        return model.displays.count < model.designDisplays
             ? "Present (\(model.displays.count) of \(model.designDisplays) displays)" : "Present"
     }
 }

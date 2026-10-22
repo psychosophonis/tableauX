@@ -43,10 +43,15 @@ struct TableauSizeRow: View {
                 let isThisMac = m.name == model.machineName
                 let count = isThisMac ? model.designDisplays : m.displays
                 HStack(spacing: 2) {
-                    Stepper("\(m.displayName): \(count) display\(count == 1 ? "" : "s")",
+                    // [claude] Step 3: on a conductor this Mac can go down to 0,
+                    // "conducts only": no screens of its own in the tableau.
+                    let canConductOnly = isThisMac && model.mode == .conductor
+                    Stepper(count == 0 && isThisMac ? "\(m.displayName): conducts only, no screens"
+                                                    : "\(m.displayName): \(count) display\(count == 1 ? "" : "s")",
                             value: Binding(get: { count }, set: { model.setDisplays(m.name, $0) }),
-                            in: (isThisMac ? max(model.displays.count, 1) : 1)...16)
+                            in: (canConductOnly ? 0 : isThisMac ? max(model.displays.count, 1) : 1)...16)
                         .fixedSize()
+                        .help(canConductOnly ? "Down to 0: this Mac only conducts. Present then leaves its screen alone and gives you remote controls here." : "")
                     // [claude] Compose ahead: a Mac added for later can go
                     // again (not this Mac, not one that's connected).
                     if !isThisMac, !model.isConnected(m.name) {
@@ -101,6 +106,17 @@ private struct MachineRow: View {
                 Text(model.displayName(of: machine)).font(.headline).lineLimit(1)
                     .help(model.displayName(of: machine) == machine ? machine : "\(model.displayName(of: machine)) (this computer: \(machine))")
                 Text(isThisMac ? "this Mac · \(state)" : state).font(.caption).foregroundStyle(.secondary)
+                // [claude] Step 2's fallback: when files didn't decide which
+                // part a joining Mac is, a person says so here.
+                if model.mode == .conductor, model.unclaimedParts.contains(machine), !model.unmatchedPlayers.isEmpty {
+                    Menu("Played by…") {
+                        ForEach(model.unmatchedPlayers, id: \.self) { p in
+                            Button(p) { model.assign(part: machine, to: p) }
+                        }
+                    }
+                    .font(.caption).fixedSize()
+                    .help("A Mac joined that wasn't recognised by its files. Choose which one plays this part.")
+                }
                 // [claude] No display count here: it is the SHOW's, the same
                 // for every work (Mat's triptych), so it lives in the
                 // Tableau row under the Show menu. A stepper beside one
@@ -120,6 +136,7 @@ private struct MachineRow: View {
     }
 
     private var state: String {
+        if isThisMac, model.conductsOnly { return "conducts only: no screens" }
         if isThisMac { return "\(min(model.displays.count, count)) of \(count) connected here" }
         if model.isConnected(machine) { return "connected" }
         return model.inventory(of: machine) == nil ? "not here yet: files from this Mac" : "not connected"

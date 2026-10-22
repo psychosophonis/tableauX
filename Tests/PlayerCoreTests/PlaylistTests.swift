@@ -103,6 +103,18 @@ final class PreviewLayoutTests: XCTestCase {
         XCTAssertEqual(rows.flatMap { $0.map(\.panel.file) }, ["W/W_1.mov", nil, "W/W_3.mov", nil, "W/W_5.mov"])
     }
 
+    /// Compose ahead, step 3: a laptop that only conducts has no row, and
+    /// the screens after it are numbered as if it weren't there.
+    func testAConductOnlyMacHasNoRowAndNoScreenNumbers() {
+        let show = Show(machines: [Machine(name: "Laptop", displays: 2, noScreens: true),
+                                   Machine(name: "G1", displays: 3, label: "Gallery 1")])
+        let rows = PreviewLayout.rows(show, work: Work(name: "W"))
+        XCTAssertEqual(rows.map { $0.map(\.machine) }, [["G1", "G1", "G1"]])
+        XCTAssertEqual(rows[0].map(\.screen), [1, 2, 3])
+        XCTAssertEqual(SharedShow.firstScreen(show, of: "G1"), 1)
+        XCTAssertEqual(try ShowFile.decode(ShowFile.encode(show)).machines[0].noScreens, true)
+    }
+
     func testAMacWithNoScreensForTheWorkStillHasItsTiles() {
         let show = Show(machines: [Machine(name: "A", displays: 1), Machine(name: "B", displays: 2)])
         XCTAssertEqual(PreviewLayout.rows(show, work: Work(name: "W")).map(\.count), [1, 2])

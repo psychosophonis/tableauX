@@ -174,6 +174,40 @@ public enum Collect {
     }
 }
 
+/// [claude] Compose ahead, step 4 (Mat, 2026-10-22): one folder per Mac,
+/// ready to copy to it. Each kit holds the files that Mac's screens play, at
+/// the SAME paths they have in this library (Works/<work>/<file>), so the
+/// show's paths stay true on the composer and in every kit. The conductor's
+/// kit (a gallery Mac conducting) also carries the show.
+public enum Kits {
+    public struct Kit: Equatable {
+        public var machine: String
+        public var label: String
+        public var copies: [Collect.Copy]     // dest relative to the kit's Works/
+        public var withShow: Bool
+        /// Files on its screens linked from outside the library: not copied
+        /// (Collect the show first).
+        public var linked: [String]
+    }
+
+    /// A kit for every Mac with screens, plus the conductor's if it has none
+    /// (it still needs the show). `conductor` nil: this Mac conducts and
+    /// keeps the show itself.
+    public static func plan(show: Show, conductor: String?, resolve: (String) -> String) -> [Kit] {
+        var kits: [Kit] = []
+        for m in show.machines where m.screenCount > 0 || m.name == conductor {
+            var seen: Set<String> = [], copies: [Collect.Copy] = [], linked: [String] = []
+            for work in show.works {
+                for f in (work.screens[m.name] ?? []).prefix(m.screenCount).compactMap(\.file) where seen.insert(f).inserted {
+                    if f.hasPrefix("/") { linked.append(f) } else { copies.append(Collect.Copy(source: resolve(f), dest: f)) }
+                }
+            }
+            kits.append(Kit(machine: m.name, label: m.displayName, copies: copies, withShow: m.name == conductor, linked: linked))
+        }
+        return kits
+    }
+}
+
 /// Importing a folder from anywhere (Mat: LINK IN PLACE). Nothing is copied:
 /// panels hold full paths to the files where they are, which is fast and costs
 /// no disk, at the price that the show breaks if that folder moves. Collect is

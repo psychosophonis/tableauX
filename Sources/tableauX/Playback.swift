@@ -276,6 +276,18 @@ final class Playback {
     /// displays. A conductor's preview tells players to preview too.
     var isPreview: Bool { preview != nil }
 
+    /// [claude] One line for the remote controls: which work, and its state.
+    var statusLine: String {
+        guard started, let now = showNow() else { return "Starting…" }
+        if pausedAt != nil { return "Paused" + (loaded.map { " · \(works[$0.index].name)" } ?? "") }
+        switch timeline.segment(at: now, anchor: anchor.index, start: anchor.start).position {
+        case .work(let i, _): return "Playing \(works[i].name)"
+        case .gap(let n): return "Black gap · next: \(works[n].name)"
+        case .waiting: return "Waiting"
+        case .ended: return "Ended"
+        }
+    }
+
     /// Starts the show. A leader (conductor, standalone) loads the first
     /// work and starts it 1 s after its panels are ready; a player passes the
     /// conductor's anchor (work `index` starts at `start`) and joins the
@@ -294,8 +306,12 @@ final class Playback {
             for screen in screens { windows.append(makeWindow(on: screen)) }
             surfaces = windows.compactMap { w in w.contentView?.layer.map { (w, $0) } }
             log("\(windows.count) window(s) up")
-            NSCursor.hide()
-            NSApp.presentationOptions = [.hideDock, .hideMenuBar]
+            // [claude] A conductor with no screens (compose ahead, step 3)
+            // keeps its cursor, Dock and menu bar: it's being used.
+            if !screens.isEmpty {
+                NSCursor.hide()
+                NSApp.presentationOptions = [.hideDock, .hideMenuBar]
+            }
         }
         onWindowsUp()
         IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
@@ -601,7 +617,9 @@ final class Playback {
     /// [claude] → / ← (§ v4 › Playing, manual override): black now, the
     /// chosen work after the gap. "Current" is the work playing, or in a gap
     /// the one coming, so → in a gap skips the work about to start.
-    private func skip(forward: Bool) {
+    /// [claude] Not private since compose ahead, step 3: a conductor with no
+    /// screens of its own drives these from the setup window's remote strip.
+    func skip(forward: Bool) {
         guard started, pausedAt == nil, let now = showNow() else { return }
         let seg = timeline.segment(at: now, anchor: anchor.index, start: anchor.start)
         let current: Int
@@ -621,7 +639,7 @@ final class Playback {
         advance()
     }
 
-    private func togglePause() {
+    func togglePause() {
         // [claude] Nothing to pause until the start is scheduled. Earlier, a
         // Space while files were still loading paused the players built so far,
         // then start() scheduled them anyway: playing, but marked as paused.
@@ -743,7 +761,7 @@ final class Playback {
         revealTimer?.invalidate()
         driftTimer?.invalidate()
         unload()
-        if preview == nil {                 // [claude] the preview hid neither
+        if preview == nil, !screens.isEmpty {     // [claude] the preview, and a screenless conductor, hid neither
             NSApp.presentationOptions = []
             NSCursor.unhide()
         }

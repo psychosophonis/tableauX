@@ -205,9 +205,10 @@ public enum PreviewLayout {
     /// screen is black.
     public static func rows(_ show: Show, work: Work) -> [[PreviewTile]] {
         var screen = 0
-        return show.machines.map { m in
+        // [claude] A Mac that only conducts has no screens, so no row.
+        return show.machines.filter { $0.screenCount > 0 }.map { m in
             let panels = work.screens[m.name] ?? []
-            return (0 ..< max(m.displays, 0)).map { d in
+            return (0 ..< m.screenCount).map { d in
                 screen += 1
                 return PreviewTile(machine: m.name, display: d + 1, screen: screen,
                                    panel: d < panels.count ? panels[d] : PanelConfig())

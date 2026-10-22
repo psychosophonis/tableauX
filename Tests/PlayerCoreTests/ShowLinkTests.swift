@@ -109,6 +109,34 @@ final class SharedShowTests: XCTestCase {
         XCTAssertEqual(m.works[0].screens["B"]?.map(\.file), ["W/W_4.mov", "W/W_5.mov", "W/W_6.mov"])
     }
 
+    /// Compose ahead, step 2: a Mac claims its part by its files.
+    func testAMacClaimsThePartWhoseFilesItHas() {
+        let s = Show(machines: [Machine(name: "Laptop", displays: 1),
+                                Machine(name: "Gallery 1", displays: 2, label: "Gallery 1"),
+                                Machine(name: "Gallery 2", displays: 2, label: "Gallery 2")],
+                     works: [Work(name: "W", screens: [
+                        "Gallery 1": [PanelConfig(file: "W/W_2.mov"), PanelConfig(file: "W/W_3.mov")],
+                        "Gallery 2": [PanelConfig(file: "W/W_4.mov"), PanelConfig(file: "W/W_5.mov")]])])
+        let b = inv("Mini-0423", 2, ["W": [("W_4.mov", 5), ("W_5.mov", 5)]])
+        let part = SharedShow.claim(s, files: SharedShow.files(of: b), candidates: ["Gallery 1", "Gallery 2"])
+        XCTAssertEqual(part, "Gallery 2")
+        let c = s.claimingMachine("Gallery 2", as: "Mini-0423")
+        XCTAssertEqual(c.machines[2], Machine(name: "Mini-0423", displays: 2, label: "Gallery 2"))
+        XCTAssertEqual(c.works[0].screens["Mini-0423"]?.map(\.file), ["W/W_4.mov", "W/W_5.mov"])
+        XCTAssertNil(c.works[0].screens["Gallery 2"])
+        XCTAssertEqual(c.machineIndex(named: "Mini-0423"), 2)
+    }
+
+    /// No file in common, or a tie: nobody guesses; a person decides.
+    func testNoClaimWithoutAClearWinner() {
+        let s = Show(machines: [Machine(name: "G1", displays: 1), Machine(name: "G2", displays: 1)],
+                     works: [Work(name: "W", screens: ["G1": [PanelConfig(file: "W/a.mov")], "G2": [PanelConfig(file: "W/a.mov")]])])
+        XCTAssertNil(SharedShow.claim(s, files: ["W/a.mov"], candidates: ["G1", "G2"]))     // tie
+        XCTAssertNil(SharedShow.claim(s, files: ["W/z.mov"], candidates: ["G1", "G2"]))     // nothing shared
+        XCTAssertEqual(SharedShow.claim(s, files: ["W/a.mov"], candidates: ["G2"]), "G2")   // excluded candidates
+        XCTAssertEqual(s.claimingMachine("G1", as: "G2"), s)                                 // name taken: unchanged
+    }
+
     /// Mat (2026-10-22): a player sets its own screen, the conductor records it.
     func testAPlayersOwnScreenEditIsRecorded() throws {
         let s = Show(machines: [Machine(name: "A", displays: 1), Machine(name: "B", displays: 3)],

@@ -111,6 +111,49 @@ final class AppModel: ObservableObject {
 
     // MARK: Compose ahead (Mat, 2026-10-22) [claude]
 
+    /// [claude] Step 2: parts no real Mac has taken yet: not this Mac, not a
+    /// connected player, never reported.
+    var unclaimedParts: [String] {
+        let connected = Set(players.values.compactMap(\.machine))
+        return show.machines.map(\.name).filter { $0 != machineName && !connected.contains($0) && reported[$0] == nil }
+    }
+
+    /// Connected players whose part wasn't recognised (they were added as
+    /// Macs of their own), for "Played by ▾" on an unclaimed part.
+    var unmatchedPlayers: [String] {
+        let connected = Set(players.values.compactMap(\.machine))
+        return joinedUnrecognised.filter { connected.contains($0) }.sorted()
+    }
+
+    /// Players this session added as Macs of their own, because no part was
+    /// theirs by name or by files.
+    @Published private(set) var joinedUnrecognised: Set<String> = []
+
+    /// The fallback when files don't decide: player `player` plays `part`.
+    /// The row the player was given on joining goes; the part takes its
+    /// name; its report then fills any screens still empty.
+    func assign(part: String, to player: String) {
+        show = show.removingMachine(player).claimingMachine(part, as: player)
+        joinedUnrecognised.remove(player)
+        if let inv = reported[player] {
+            show = SharedShow.merge(show, with: inv, conductor: Self.thisMac, addingNewWorks: false)
+        }
+        NSLog("link: %@ plays the part %@ (chosen by hand)", player, part)
+    }
+
+    /// When this Mac opens a show of several Macs with no part under its
+    /// own name (a gallery Mac conducting from its kit), it takes the part
+    /// its library's files match.
+    private func claimOwnPart() {
+        guard show.machines.count > 1, !show.machines.contains(where: { $0.name == Self.thisMac }) else { return }
+        let connected = Set(players.values.compactMap(\.machine))
+        let candidates = show.machines.map(\.name).filter { !connected.contains($0) }
+        if let part = SharedShow.claim(show, files: Set(ownFiles), candidates: candidates) {
+            NSLog("folder: this Mac takes the part %@ (by its files)", part)
+            show = show.claimingMachine(part, as: Self.thisMac)
+        }
+    }
+
     /// What people call Mac `m` in setup and the preview: its label, else its name.
     func displayName(of m: String) -> String {
         show.machines.first { $0.name == m }?.displayName ?? m
@@ -163,7 +206,7 @@ final class AppModel: ObservableObject {
     /// (as it last reported, or as saved).
     func panels(on m: String) -> [PanelConfig] {
         guard show.works.indices.contains(selectedWork) else { return [] }
-        let count = show.machines.first(where: { $0.name == m })?.displays ?? 0
+        let count = show.machines.first(where: { $0.name == m })?.screenCount ?? 0
         var ps = show.works[selectedWork].screens[m] ?? []
         while ps.count < count { ps.append(PanelConfig()) }
         return ps
@@ -1088,6 +1131,16 @@ final class AppModel: ObservableObject {
             players[id]?.inventory = inv
             reported[inv.machine] = inv
             NSLog("link: inventory from %@: %d folder(s), %d display(s)", inv.machine, inv.folders.count, inv.displays)
+            // [claude] Compose ahead, step 2: a Mac the show doesn't know by
+            // name takes the part composed for it, judged by its files.
+            if !show.machines.contains(where: { $0.name == inv.machine }) {
+                if let part = SharedShow.claim(show, files: SharedShow.files(of: inv), candidates: unclaimedParts) {
+                    NSLog("link: %@ takes the part %@ (by its files)", inv.machine, part)
+                    show = show.claimingMachine(part, as: inv.machine)
+                } else {
+                    joinedUnrecognised.insert(inv.machine)       // "Played by…" can place it
+                }
+            }
             // Folding it in changes the show, whose didSet shares it again,
             // now with this player's files and lengths in it.
             // P4d: a player's new folders join the show only while it is
@@ -1242,6 +1295,8 @@ final class AppModel: ObservableObject {
 
     private func updateClockStatus() {
         statusTicks += 1
+        let line = playback?.statusLine ?? ""
+        if line != remoteStatus { remoteStatus = line }          // [claude] the remote controls' line
         server?.broadcast()          // the once-a-second repeat of the show state
         if statusTicks % 5 == 0 { refreshInventory(); sendReport(); rescan() }    // [claude] player: inventory; others: the library
         if let server {
@@ -1364,7 +1419,7 @@ final class AppModel: ObservableObject {
         // it grows when more displays are connected, never shrinks when
         // fewer are (a laptop standing in for the gallery Mac). Only
         // setDisplays (a person) makes it smaller.
-        if let mi = machineIndex, show.machines[mi].displays < displays.count {
+        if let mi = machineIndex, !conductsOnly, show.machines[mi].displays < displays.count {
             show.machines[mi].displays = displays.count
         }
         fillNewDisplays()
@@ -1373,7 +1428,15 @@ final class AppModel: ObservableObject {
     /// This Mac's displays as the show is designed: what setup lists, what
     /// a scan assigns and what the preview shows. A real show plays on as
     /// many of them as are connected.
-    var designDisplays: Int { max(machineIndex.map { show.machines[$0].displays } ?? 0, displays.count) }
+    var designDisplays: Int {
+        // [claude] Compose ahead, step 3: a Mac that only conducts has none.
+        if conductsOnly { return 0 }
+        return max(machineIndex.map { show.machines[$0].displays } ?? 0, displays.count)
+    }
+
+    /// This Mac takes part with no screens: it conducts (from the setup
+    /// window's remote controls) while the other Macs present.
+    var conductsOnly: Bool { machineIndex.map { show.machines[$0].noScreens == true } ?? false }
 
     /// [claude] Sizes this Mac's part by what its works need (the highest
     /// "_N", or the most files in a work), when a show is first made from
@@ -1390,6 +1453,13 @@ final class AppModel: ObservableObject {
     /// them.
     func setDisplays(_ m: String, _ n: Int) {
         guard let i = show.machines.firstIndex(where: { $0.name == m }) else { return }
+        // [claude] 0 = this Mac only conducts (step 3): its design count is
+        // kept, so going back up restores its screens.
+        if n <= 0, m == machineName, mode == .conductor {
+            show.machines[i].noScreens = true
+            return
+        }
+        show.machines[i].noScreens = nil
         show.machines[i].displays = min(max(n, 1), 16)
         if m == machineName { fillNewDisplays() }
     }
@@ -1614,6 +1684,7 @@ final class AppModel: ObservableObject {
             autoShow = false
             selectedWork = 0
             leftOver = [:]
+            claimOwnPart()                   // [claude] compose ahead, step 2
             UserDefaults.standard.set(url.path, forKey: lastShowKey)
             refreshDisplays()
             // [claude] P4d: on a conductor, the players already connected
@@ -1703,7 +1774,10 @@ final class AppModel: ObservableObject {
         let screens = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { s in
             Self.info(for: s).map { ($0.id, s) }
         })
-        let ordered = displays.compactMap { screens[$0.id] }
+        // [claude] Step 3: a Mac that only conducts presents on no screens
+        // of its own: no full-screen windows, the setup window stays (with
+        // the remote controls), the players present.
+        let ordered = conductsOnly ? [] : displays.compactMap { screens[$0.id] }
         // [claude] Each work's part on this Mac, files resolved to full paths
         // and measured: what Playback needs to lay out and time every work.
         let parts = show.works.indices.map { w -> WorkPart in
@@ -1726,12 +1800,99 @@ final class AppModel: ObservableObject {
         let report: ((ShowState) -> Void)? = s != nil ? nil : { [weak self] state in self?.server?.publish(state) }
         let pb = Playback(screens: ordered, works: parts, playlist: show.playlist, sync: show.sync, clock: clock,
                           allowSkip: true, onStateChange: report,     // [claude] P3a: players follow → / ← via the state's work index
-                          onWindowsUp: { [weak self] in self?.setupWindows.forEach { $0.orderOut(nil) } },
+                          onWindowsUp: { [weak self] in
+                              // With no screens of its own the setup window IS the
+                              // control surface; hiding it would also quit the app.
+                              guard !ordered.isEmpty else { return }
+                              self?.setupWindows.forEach { $0.orderOut(nil) }
+                          },
                           onEnd: { [weak self] in self?.playbackEnded() })
         playback = pb
         isPlaying = true
         pb.start(following: s.map { ($0.index, $0.start) })
     }
+
+    // MARK: Kits (compose ahead, step 4) [claude]
+
+    /// Show menu › "Make kits for each Mac…": asks where, and which Mac
+    /// conducts, then writes one folder per Mac: the app, a Works/ with that
+    /// Mac's files at their library paths, and for a gallery-Mac conductor
+    /// Shows/ with the show. Copy each folder to its Mac and open the app:
+    /// the folder sets the role and the Mac claims its part by its files.
+    func makeKits() {
+        guard collecting == nil, !show.works.isEmpty else { return }
+        // Which Mac conducts: this one (keeps the show) or one in the tableau.
+        let a = NSAlert()
+        a.messageText = "Make a kit for each Mac"
+        a.informativeText = "Which Mac conducts at the gallery? Its kit also gets the show. If this Mac conducts, it keeps the show and the kits are for the others."
+        let menu = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 26))
+        let others = show.machines.filter { $0.name != machineName }
+        menu.addItem(withTitle: "This Mac (\(machineName.map(displayName(of:)) ?? Self.thisMac))")
+        others.forEach { menu.addItem(withTitle: $0.displayName) }
+        a.accessoryView = menu
+        a.addButton(withTitle: "Choose Where…")
+        a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let conductor: String? = menu.indexOfSelectedItem == 0 ? nil : others[menu.indexOfSelectedItem - 1].name
+        guard let dir = chooseCollectFolder() else { return }
+
+        let kits = Kits.plan(show: show, conductor: conductor, resolve: resolve).filter { $0.machine != machineName || conductor == machineName }
+        let showName = showPath?.deletingPathExtension().lastPathComponent ?? "Show"
+        let showData = try? ShowFile.encode(show)
+        let ext = Self.showExtension
+        let app = Bundle.main.bundleURL.pathExtension == "app" ? Bundle.main.bundleURL : nil
+        let fm = FileManager.default
+        let missing = kits.flatMap { $0.copies.map(\.source) }.filter { !fileExists($0) }
+        let linked = Set(kits.flatMap(\.linked))
+        let total = kits.reduce(0) { $0 + $1.copies.count }
+        collecting = "Making kits: 0 of \(total) files…"
+        NSLog("kits: %d kit(s), %d file(s) into %@", kits.count, total, dir.path)
+        Task.detached {
+            var done = 0, failure: String?
+            do {
+                for kit in kits {
+                    let root = dir.appendingPathComponent(Collect.uniqueName("\(showName) – \(Collect.folderName(kit.label))", taken: []))
+                    let works = root.appendingPathComponent(ShowFolder.worksName)
+                    try fm.createDirectory(at: works, withIntermediateDirectories: true)
+                    if let app { try? fm.copyItem(at: app, to: root.appendingPathComponent(app.lastPathComponent)) }
+                    if kit.withShow, let showData {
+                        let shows = root.appendingPathComponent(ShowFolder.showsName)
+                        try fm.createDirectory(at: shows, withIntermediateDirectories: true)
+                        try showData.write(to: shows.appendingPathComponent("\(showName).\(ext)"))
+                    }
+                    for c in kit.copies where fm.fileExists(atPath: c.source) {
+                        let dest = works.appendingPathComponent(c.dest)
+                        try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        if !fm.fileExists(atPath: dest.path) { try fm.copyItem(atPath: c.source, toPath: dest.path) }
+                        done += 1
+                        let n = done
+                        await MainActor.run { self.collecting = "Making kits: \(n) of \(total) files…" }
+                    }
+                }
+            } catch {
+                failure = "Making kits stopped: \(error.localizedDescription)"
+            }
+            await MainActor.run { [failure, done] in
+                self.collecting = nil
+                if let failure { self.lastError = failure; return }
+                var note = "Made \(kits.count) kit(s) with \(done) file(s)"
+                if !missing.isEmpty { note += "; \(missing.count) file(s) not on this Mac" }
+                if !linked.isEmpty { note += "; \(linked.count) linked file(s) left out (Collect the show first)" }
+                self.libraryNote = note + "."
+                NSWorkspace.shared.activateFileViewerSelecting([dir])
+            }
+        }
+    }
+
+    // MARK: Remote controls (compose ahead, step 3) [claude]
+
+    /// What's playing, for the remote control strip; refreshed every second.
+    @Published private(set) var remoteStatus = ""
+
+    /// The conductor's controls when it has no screens to take keys:
+    /// the same actions as Space, → / ← and Esc on a panel window.
+    func remotePause() { playback?.togglePause() }
+    func remoteSkip(forward: Bool) { playback?.skip(forward: forward) }
 
     func stop() { playback?.stop() }
 

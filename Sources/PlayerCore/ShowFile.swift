@@ -32,13 +32,20 @@ public struct Machine: Codable, Equatable {
     /// added ahead has name = label until it is claimed by a real Mac.
     /// Optional, so show files from before it still open.
     public var label: String?
+    /// [claude] This Mac takes part with NO screens of its own (a laptop that
+    /// composes and conducts, Mat 2026-10-22). Optional in the file.
+    public var noScreens: Bool?
 
-    public init(name: String, displays: Int = 0, label: String? = nil) {
-        self.name = name; self.displays = displays; self.label = label
+    public init(name: String, displays: Int = 0, label: String? = nil, noScreens: Bool? = nil) {
+        self.name = name; self.displays = displays; self.label = label; self.noScreens = noScreens
     }
 
     /// What setup and the preview call this Mac.
     public var displayName: String { label ?? name }
+
+    /// How many screens it has in the tableau: 0 for a Mac that only
+    /// conducts. Everything that numbers or lays out screens uses this.
+    public var screenCount: Int { noScreens == true ? 0 : displays }
 }
 
 /// [claude] How closely the show holds its panels to the shared clock
@@ -100,6 +107,22 @@ public struct Show: Codable, Equatable {
         guard !l.isEmpty, !machines.contains(where: { $0.name == l || $0.label == l }) else { return nil }
         var s = self
         s.machines.append(Machine(name: l, displays: min(max(displays, 1), 16), label: l))
+        return s
+    }
+
+    /// [claude] A real Mac takes part `part` (composed ahead under a label):
+    /// the part's machine takes the real computer name, keeps its label (so
+    /// people still see "Gallery 2"), and its screens move with it. A real
+    /// name already in the show, or an unknown part: unchanged.
+    public func claimingMachine(_ part: String, as realName: String) -> Show {
+        guard part != realName, let i = machines.firstIndex(where: { $0.name == part }),
+              !machines.contains(where: { $0.name == realName }) else { return self }
+        var s = self
+        s.machines[i].label = s.machines[i].label ?? part
+        s.machines[i].name = realName
+        for w in s.works.indices {
+            if let panels = s.works[w].screens.removeValue(forKey: part) { s.works[w].screens[realName] = panels }
+        }
         return s
     }
 

@@ -388,6 +388,12 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
 - 0.3.24 (2026-10-22): compose ahead, step 1 of 4: Macs by label, Add a
   Mac… / remove, their screens filled from this library and counted for
   work lengths. 2 new tests (154). Not looked at in a window.
+- 0.3.25 (2026-10-22): compose ahead steps 2–4: a Mac claims its part by
+  its files (SharedShow.claim; "Played by…" fallback); a conductor with no
+  screens (Tableau down to 0) presents on the others with a remote strip
+  (Space, ← →, Esc, Stop); Show menu › "Make kits for each Mac…". 4 new
+  tests (158). Nothing of steps 2–4 run in a window or across Macs yet;
+  spec § Composing ahead still describes step 1 only.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

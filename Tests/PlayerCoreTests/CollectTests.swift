@@ -93,6 +93,27 @@ final class CollectTests: XCTestCase {
         XCTAssertEqual(p.copies.map(\.dest), ["Smith 2/1.mp4"])
     }
 
+    // Kits (compose ahead, step 4).
+
+    func testAKitPerMacWithItsFilesAtTheirLibraryPaths() {
+        let show = Show(machines: [Machine(name: "Laptop", displays: 1, noScreens: true),
+                                   Machine(name: "G1", displays: 2, label: "Gallery 1"),
+                                   Machine(name: "G2", displays: 1, label: "Gallery 2")],
+                        works: [Work(name: "W", screens: ["Laptop": [panel("W/x.mov")],
+                                                          "G1": [panel("W/W_1.mov"), panel("W/W_2.mov"), panel("W/extra.mov")],
+                                                          "G2": [panel("W/W_3.mov")]]),
+                                Work(name: "V", screens: ["G1": [panel("W/W_1.mov"), panel("/Users/me/elsewhere.mov")]])])
+        let kits = Kits.plan(show: show, conductor: "G1", resolve: resolve)
+        XCTAssertEqual(kits.map(\.label), ["Gallery 1", "Gallery 2"])             // a conduct-only Mac gets none
+        XCTAssertEqual(kits[0].copies, [.init(source: "/Media/W/W_1.mov", dest: "W/W_1.mov"),
+                                        .init(source: "/Media/W/W_2.mov", dest: "W/W_2.mov")])   // once each; within its 2 displays
+        XCTAssertEqual(kits[0].linked, ["/Users/me/elsewhere.mov"])
+        XCTAssertTrue(kits[0].withShow)
+        XCTAssertFalse(kits[1].withShow)
+        // This Mac conducting: no kit carries the show.
+        XCTAssertFalse(Kits.plan(show: show, conductor: nil, resolve: resolve).contains(where: \.withShow))
+    }
+
     // Collect INTO the library (Mat, 2026-10-22).
 
     private func gather(_ works: [Work], folders: [String: [String]]) -> Collect.Plan {

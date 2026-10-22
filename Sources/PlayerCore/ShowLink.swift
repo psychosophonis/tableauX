@@ -126,7 +126,7 @@ public enum SharedShow {
         } else {
             // A Mac joining the show is sized by what its works need, not
             // only by what it has plugged in (Mat, 2026-10-22).
-            let first = 1 + s.machines.reduce(0) { $0 + $1.displays }
+            let first = 1 + s.machines.reduce(0) { $0 + $1.screenCount }
             let needed = FolderScan.displaysNeeded(inventory.folders.mapValues { $0.map(\.name) }, firstScreen: first)
             designed = min(max(inventory.displays, needed), 16)
             s.machines.append(Machine(name: inventory.machine, displays: designed))
@@ -146,6 +146,28 @@ public enum SharedShow {
             if panels != set { s.works[w].screens[inventory.machine] = panels }
         }
         return s
+    }
+
+    /// [claude] Which part a Mac is, judged by its FILES (Mat, 2026-10-22:
+    /// institutional Macs can't be renamed; "the file structure should
+    /// support the build"). Each candidate part scores the number of
+    /// distinct files its screens use (relative paths, every work, within
+    /// its displays) that this Mac has. The best wins only if it shares at
+    /// least one file and nothing ties with it: a wrong guess would put one
+    /// Mac's screens on another, so when in doubt a person decides.
+    public static func claim(_ show: Show, files: Set<String>, candidates: [String]) -> String? {
+        let scored = candidates.compactMap { name -> (String, Int)? in
+            guard let m = show.machines.first(where: { $0.name == name }) else { return nil }
+            let used = Set(show.works.flatMap { ($0.screens[name] ?? []).prefix(m.screenCount).compactMap(\.file) })
+            return (name, used.intersection(files).count)
+        }.sorted { $0.1 > $1.1 }
+        guard let best = scored.first, best.1 > 0, scored.dropFirst().first?.1 != best.1 else { return nil }
+        return best.0
+    }
+
+    /// The relative paths ("Work/file") an inventory holds, for `claim`.
+    public static func files(of inventory: Inventory) -> Set<String> {
+        Set(inventory.folders.filter { !$0.key.hasPrefix("/") }.flatMap { folder, files in files.map { "\(folder)/\($0.name)" } })
     }
 
     /// [claude] The show with one screen of one Mac set (a player's own edit,
@@ -168,7 +190,7 @@ public enum SharedShow {
     /// Model, screens numbered across the Macs). A Mac not in the show: 1.
     public static func firstScreen(_ show: Show, of m: String) -> Int {
         guard let i = show.machines.firstIndex(where: { $0.name == m }) else { return 1 }
-        return 1 + show.machines[..<i].reduce(0) { $0 + $1.displays }
+        return 1 + show.machines[..<i].reduce(0) { $0 + $1.screenCount }   // a conduct-only Mac adds none
     }
 
     /// Each work's length: its longest file on any Mac (§ v4 › Playing).
