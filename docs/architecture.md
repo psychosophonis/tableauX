@@ -503,6 +503,15 @@ and works can move between shows.
   linked; a folder of folders, one work each).
 - [claude] The preview stays a separate window for now (Mat undecided:
   it can sit on a second display); docking it in Compose is possible later.
+- **Launch indicator (Mat, 2026-10-22: "first time it's slow… should say
+  building library… maybe be able to skip").** [claude] The window opens
+  before the library search (which can wake a drive): "Looking for the
+  library…", then "Measuring videos: n of N…", with **Skip** (hides it;
+  a show set to start presenting at launch doesn't, this time; measuring
+  continues). Each step's time is logged ("startup: …"). The longest wait
+  on a first launch from an external drive is macOS checking the
+  un-notarised app before tableauX runs at all (29.7 s measured); no app
+  can show anything then; notarisation would remove it.
 - [claude] Nothing has keyboard focus when the setup window opens (it
   used to be the work's name field, which typing elsewhere could rename).
 - **Interface step 1 (Mat: "a good hard look at the accretion of
@@ -572,8 +581,11 @@ copy of tableauX and a folder to the client and have it, as much as
 possible, just work."
 - **The folder is called `tableauX` (Mat).** The media folder, first match:
   a folder chosen with Choose… (saved; a deliberate choice wins); **the
-  folder the app is in (Mat)**, if it holds a show file or a folder of
-  videos; a `tableauX` folder beside the app (Mat's layout, 0.3.9); then
+  folder the app is in (Mat)**, if it is clearly a library: a `Works` or
+  `Shows` folder, or a show file [claude, 0.3.21: "any folder of videos"
+  used to count, and an app opened from Downloads took Downloads as its
+  library, every video folder a work (Mat's M5)]; a `tableauX` folder
+  beside the app (Mat's layout, 0.3.9); then
   `~/tableauX`, `~/Movies/tableauX`, `~/Desktop/tableauX`
   [claude: home and Movies first, as macOS asks before an app reads the
   Desktop]. A folder found by looking is looked for again at each launch.
@@ -711,6 +723,17 @@ possible, just work."
     conductor breaks that: the next inventory with the old folder name adds
     it again as a new work. Fixing it needs a display name separate from
     the folder name in the show file.
+  - **A player sets its own screens (Mat, 2026-10-22: "assign files to
+    screens… from directories that haven't been scanned on the client…
+    report back to the conductor").** On a player its own tiles on the
+    tableau map are editable while the conductor is connected (library
+    files, "Choose a file anywhere…", Audio, Fit/Fill). Each edit is sent
+    as `setScreen {machine, work, index, panel}`; the conductor records it
+    in its show (autosaved) and shares the show back. A file linked from
+    outside the player's library is measured there and reported in its
+    inventory under its folder's FULL PATH, so the conductor's lengths and
+    file check include it; full-path folders are not works (not in the
+    pool, never added to the all-works show).
   - Play on the conductor is blocked by a player's missing or unreadable
     files, by a player that hasn't checked its files yet, and by a player
     on another build. A Mac in the show that isn't connected is a warning:

@@ -17,9 +17,14 @@ public enum ShowFolder {
     /// to its listing. The app's own folder only counts if it does, so an
     /// app sitting in /Applications or Downloads doesn't take that folder
     /// over as its media.
+    ///
+    /// [claude] Only a clear MARKER counts: a show file, or a `Works` or
+    /// `Shows` folder. "Any folder with videos" used to count too, and an
+    /// app opened from Downloads (Mat's M5, 2026-10-22) took Downloads as
+    /// its library: every folder with a video in it became a work, one of
+    /// 16 screens. A folder FOUND BY NAME (`tableauX`) needs no marker.
     public static func isShowFolder(files: [String], subfolders: [String: [String]]) -> Bool {
         files.contains { ($0 as NSString).pathExtension.lowercased() == showExtension }
-            || subfolders.contains { !$0.key.hasPrefix(".") && !FolderScan.videos($0.value).isEmpty }
             || subfolders.keys.contains { $0.caseInsensitiveCompare(worksName) == .orderedSame
                                           || $0.caseInsensitiveCompare(showsName) == .orderedSame }
     }
@@ -60,8 +65,12 @@ public enum ShowFolder {
     /// Every work in the pool: this Mac's work folders and every work a
     /// player reported, once each, in name order. "Add from library"
     /// offers the ones the current show doesn't have.
+    /// [claude] A folder reported under a FULL PATH ("/Users/…") holds files a
+    /// player linked to one of its screens from outside its library: they
+    /// are reported so lengths and the file check include them, but they
+    /// are not works.
     public static func pool(own: [String], inventories: [Inventory]) -> [String] {
-        Set(own + inventories.flatMap { $0.folders.keys }).filter { !$0.hasPrefix(".") }
+        Set(own + inventories.flatMap { $0.folders.keys }).filter { !$0.hasPrefix(".") && !$0.hasPrefix("/") }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 

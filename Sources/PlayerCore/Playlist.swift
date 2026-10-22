@@ -267,7 +267,9 @@ public enum PlaylistMerge {
                              addingNewWorks: Bool = true) -> [Work] {
         var result = works
         let known = Set(works.map(\.name))
-        let newNames = Set(inventories.flatMap { $0.folders.keys }).subtracting(known)
+        // [claude] Full-path folders are a player's linked files, not works
+        // (ShowFolder.pool).
+        let newNames = Set(inventories.flatMap { $0.folders.keys }.filter { !$0.hasPrefix("/") }).subtracting(known)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         if addingNewWorks { result += newNames.map { Work(name: $0) } }
         for i in result.indices {

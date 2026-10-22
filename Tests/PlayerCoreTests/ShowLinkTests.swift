@@ -109,6 +109,34 @@ final class SharedShowTests: XCTestCase {
         XCTAssertEqual(m.works[0].screens["B"]?.map(\.file), ["W/W_4.mov", "W/W_5.mov", "W/W_6.mov"])
     }
 
+    /// Mat (2026-10-22): a player sets its own screen, the conductor records it.
+    func testAPlayersOwnScreenEditIsRecorded() throws {
+        let s = Show(machines: [Machine(name: "A", displays: 1), Machine(name: "B", displays: 3)],
+                     works: [Work(name: "W", screens: ["A": [PanelConfig(file: "W/a.mov")]])])
+        let p = PanelConfig(file: "/Users/b/Desktop/x.mov", audio: true, scaling: .fill)
+        let m = SharedShow.setScreen(s, machine: "B", work: "W", index: 2, panel: p)
+        XCTAssertEqual(m.works[0].screens["B"]?.map(\.file), [nil, nil, "/Users/b/Desktop/x.mov"])
+        XCTAssertEqual(m.works[0].screens["B"]?[2], p)
+        XCTAssertEqual(m.works[0].screens["A"], s.works[0].screens["A"])
+        XCTAssertEqual(SharedShow.setScreen(s, machine: "Z", work: "W", index: 0, panel: p), s)     // not in the show
+        // It travels.
+        var r = LinkFraming.Reader()
+        let msg = LinkMessage.setScreen(machine: "B", work: "W", index: 2, panel: p)
+        XCTAssertEqual(try r.feed(LinkFraming.frame(msg)), [msg])
+    }
+
+    /// A player's linked file counts for the work's length, but its folder
+    /// is not a work in the pool or the all-works show.
+    func testALinkedFileCountsForLengthButIsNotAWork() {
+        let s = SharedShow.setScreen(Show(machines: [Machine(name: "A"), Machine(name: "B", displays: 1)],
+                                          works: [Work(name: "W")]),
+                                     machine: "B", work: "W", index: 0, panel: PanelConfig(file: "/Users/b/x.mov"))
+        let b = inv("B", 1, ["/Users/b": [("x.mov", 42)], "Lee": [("1.mp4", 5)]])
+        XCTAssertEqual(SharedShow.lengths(s, own: [0], inventories: [b]), [42])
+        XCTAssertEqual(ShowFolder.pool(own: [], inventories: [b]), ["Lee"])
+        XCTAssertEqual(SharedShow.merge(s, with: b, conductor: "A").works.map(\.name), ["W", "Lee"])
+    }
+
     func testHandSetScreensAreKeptAndNewDisplaysFill() {
         let set = [PanelConfig(file: "Smith/3.mp4", audio: true)]
         var s = Show(machines: [Machine(name: "A")], works: [Work(name: "Smith", screens: ["B": set])])

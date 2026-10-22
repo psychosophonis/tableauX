@@ -100,6 +100,23 @@ final class AppModel: ObservableObject {
         guard i < ps.count else { return }
         ps[i] = p
         show.works[selectedWork].screens[name] = ps
+        // [claude] On a player the show is the conductor's: tell it, and it
+        // records the change and shares it back (Mat, 2026-10-22). Only a
+        // person's edit comes through here, never a show arriving, so the
+        // echo can't loop.
+        if mode == .player, linkUp {
+            linkClient?.send(.setScreen(machine: name, work: show.works[selectedWork].name, index: i, panel: p))
+        }
+    }
+
+    /// [claude] Can this Mac edit machine `m`'s screens? The conductor and a
+    /// standalone Mac: any. A player: its own, while the conductor is
+    /// connected (offline edits would be overwritten by the next show).
+    func canEditScreens(of m: String) -> Bool {
+        switch mode {
+        case .standalone, .conductor: return true
+        case .player: return m == machineName && linkUp && sharedLengths != nil
+        }
     }
 
     // MARK: Another Mac's screens, set from the conductor (v4 P4a) [claude]
@@ -830,11 +847,11 @@ final class AppModel: ObservableObject {
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChanged() }
         }
-        // Find the folder, show and role (P4b), then start the clock exactly once.
+        // [claude] Only what needs no disk happens here. The library search
+        // (which may wake a sleeping drive) waits until the window is on
+        // screen and can say what it's doing: see launched() (Mat,
+        // 2026-10-22: "we need an indicator as it's launching").
         conductorAddress = UserDefaults.standard.string(forKey: addressKey) ?? ""
-        findEverything()
-        clockReady = true
-        restartClock()
         // [claude] Autosave: an edit made in the last second is written on quit.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.rescan() }     // back from Finder: pick up what changed
@@ -1015,6 +1032,12 @@ final class AppModel: ObservableObject {
         case .report(let machine, let blocking):
             players[id, default: PlayerLink()].machine = machine
             players[id]?.blocking = blocking
+        case .setScreen(let machine, let work, let index, let panel):
+            // [claude] A person on that player set one of its own screens
+            // (Mat, 2026-10-22). Recorded in the show (autosave keeps it)
+            // and shared back, so every Mac has one version of the show.
+            NSLog("link: %@ set %@ screen %d to %@", machine, work, index + 1, panel.file ?? "black")
+            show = SharedShow.setScreen(show, machine: machine, work: work, index: index, panel: panel)
         case .show:
             break                            // only a conductor sends these
         }
@@ -1104,6 +1127,24 @@ final class AppModel: ObservableObject {
             }
             if !files.isEmpty { folders[folder] = files }
         }
+        // [claude] Files linked to this Mac's screens from outside the library
+        // (a person chose them here, Mat 2026-10-22): reported under their
+        // folder's full path, so the conductor's lengths and file check
+        // include them. They are not works (ShowFolder.pool skips them).
+        if let me = machineName {
+            for work in show.works {
+                for f in (work.screens[me] ?? []).compactMap(\.file) where f.hasPrefix("/") {
+                    guard let a = try? fm.attributesOfItem(atPath: f) else { continue }
+                    guard let info = media[f] else { loadInfo(f); complete = false; continue }
+                    let dir = (f as NSString).deletingLastPathComponent, name = (f as NSString).lastPathComponent
+                    guard !(folders[dir]?.contains { $0.name == name } ?? false) else { continue }
+                    folders[dir, default: []].append(InventoryFile(
+                        name: name, size: (a[.size] as? Int64) ?? 0,
+                        modified: (a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0,
+                        duration: info.duration, fps: info.fps, hasAudio: info.hasAudio))
+                }
+            }
+        }
         guard complete else { return }                           // try again when the measuring is done
         let inv = Inventory(machine: Self.thisMac, displays: displays.count, folders: folders)
         if inv != sentInventory {
@@ -1191,15 +1232,55 @@ final class AppModel: ObservableObject {
     func launched() {
         guard !hasLaunched else { return }
         hasLaunched = true
-        // [claude] P4e: `--preview` on the command line opens the preview at
-        // launch, so it can be checked without a person clicking.
-        if CommandLine.arguments.contains("--preview") {
-            Task { await infoLoaded(); preview() }
-            return
+        startupStatus = "Looking for the library…"
+        // A moment's delay so the window (and that line) is drawn before the
+        // search, which can block while a drive spins up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            MainActor.assumeIsolated { self?.startUp() }
         }
-        guard show.playOnLaunch else { return }
+    }
+
+    // MARK: Launch, with an indicator (Mat, 2026-10-22) [claude]
+
+    /// What the launch is doing, for the banner; nil when done or skipped.
+    @Published private(set) var startupStatus: String?
+    /// Skip pressed: the banner goes, and a show set to start presenting at
+    /// launch doesn't (this time). Measuring carries on: lengths need it.
+    private var startupSkipped = false
+
+    func skipStartup() {
+        startupSkipped = true
+        startupStatus = nil
+        NSLog("startup: skipped")
+    }
+
+    private func startUp() {
+        let t0 = Date()
+        // Find the folder, show and role (P4b), then start the clock once.
+        // The role set here isn't "chosen by hand": clockReady is still false.
+        findEverything()
+        clockReady = true
+        restartClock()
+        NSLog("startup: library in %.2f s (%@)", Date().timeIntervalSince(t0), mediaFolder.isEmpty ? "none" : mediaFolder)
         Task {
-            await infoLoaded()
+            let t1 = Date()
+            let total = infoLoads.count + media.count
+            while !infoLoads.isEmpty {
+                if !startupSkipped { startupStatus = "Measuring videos: \(total - infoLoads.count) of \(total)…" }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            NSLog("startup: %d video(s) measured in %.2f s", total, Date().timeIntervalSince(t1))
+            let wantsPresent = show.playOnLaunch, wantsPreview = CommandLine.arguments.contains("--preview")
+            if !startupSkipped, wantsPresent || wantsPreview {
+                startupStatus = wantsPreview ? "Opening the preview…" : "Starting the show…"
+            } else {
+                startupStatus = nil
+            }
+            // [claude] P4e: `--preview` on the command line opens the preview
+            // at launch, so it can be checked without a person clicking.
+            if wantsPreview { startupStatus = nil; preview(); return }
+            guard wantsPresent, !startupSkipped else { startupStatus = nil; return }
+            startupStatus = nil
             play()
         }
     }

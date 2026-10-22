@@ -142,8 +142,18 @@ private struct ScreenTile: View {
         .buttonStyle(.plain)
         .help("\(machine) · display \(index + 1) · screen \(screen)" + (missing ? " · file not found" : ""))
         .popover(isPresented: $editing, arrowEdge: .bottom) {
-            ScreenEditor(model: model, machine: machine, index: index, screen: screen, panel: panel)
-                .disabled(model.mode == .player)
+            // [claude] A player edits its own screens (sent to the conductor);
+            // other Macs' screens are the conductor's to set.
+            VStack(alignment: .leading, spacing: 0) {
+                if !model.canEditScreens(of: machine) {
+                    Text(model.mode == .player && machine == model.machineName
+                         ? "Connect to the conductor to change this Mac's screens."
+                         : "Set on the conductor, or on \(machine) itself.")
+                        .font(.caption).foregroundStyle(.secondary).padding([.horizontal, .top])
+                }
+                ScreenEditor(model: model, machine: machine, index: index, screen: screen, panel: panel)
+                    .disabled(!model.canEditScreens(of: machine))
+            }
         }
     }
 

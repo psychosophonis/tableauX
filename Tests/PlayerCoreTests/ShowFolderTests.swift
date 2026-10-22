@@ -7,10 +7,19 @@ final class ShowFolderTests: XCTestCase {
 
     private func disk(_ folders: [String: Listing]) -> (String) -> Listing? { { folders[$0] } }
 
-    func testTheAppsOwnFolderWinsWhenItHoldsAShowOrWorks() {
-        let d = disk(["/Vol/Show": (["tableauX.app"], ["Smith": ["1.mp4"]]),
+    func testTheAppsOwnFolderWinsWhenItIsALibrary() {
+        let d = disk(["/Vol/Show": (["tableauX.app"], ["Works": ["Smith"]]),
                       "/Users/m/tableauX": ([], [:])])
         XCTAssertEqual(ShowFolder.pick(chosen: nil, appFolder: "/Vol/Show", home: "/Users/m", listing: d), "/Vol/Show")
+    }
+
+    /// Mat's M5 (2026-10-22): opened from Downloads, which has folders of
+    /// videos. Downloads is not a library; the app must look elsewhere.
+    func testDownloadsWithVideoFoldersIsNotALibrary() {
+        let d = disk(["/Users/m/Downloads": (["tableauX.app", "clip.mov"], ["shoot": ["a.mov", "b.mov"], "render": ["x.mp4"]]),
+                      "/Users/m/Movies/tableauX": ([], ["Works": []])])
+        XCTAssertEqual(ShowFolder.pick(chosen: nil, appFolder: "/Users/m/Downloads", home: "/Users/m", listing: d),
+                       "/Users/m/Movies/tableauX")
     }
 
     /// An app in /Applications (or Downloads) must not adopt that folder.
@@ -44,9 +53,9 @@ final class ShowFolderTests: XCTestCase {
         XCTAssertEqual(ShowFolder.pick(chosen: "/gone", appFolder: "/Vol/Show", home: "/Users/m", listing: d), "/Vol/Show")
     }
 
-    func testAShowFileOrAWorkFolderMakesAShowFolder() {
+    func testOnlyAShowFileOrWorksOrShowsMakesALibrary() {
         XCTAssertTrue(ShowFolder.isShowFolder(files: ["Class.TABLEAUX"], subfolders: [:]))
-        XCTAssertTrue(ShowFolder.isShowFolder(files: [], subfolders: ["Smith": ["1.mov"]]))
+        XCTAssertFalse(ShowFolder.isShowFolder(files: [], subfolders: ["Smith": ["1.mov"]]))     // videos alone: no
         XCTAssertFalse(ShowFolder.isShowFolder(files: ["notes.txt"], subfolders: ["Empty": ["a.txt"], ".hidden": ["1.mp4"]]))
         XCTAssertEqual(ShowFolder.shows(in: ["a.tableaux", ".b.tableaux", "c.mp4"]), ["a.tableaux"])
     }

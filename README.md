@@ -30,6 +30,12 @@ The app isn't notarised by Apple, so macOS blocks it the first time:
    **Open Anyway** next to "tableauX was blocked".
 3. Confirm. After this it opens normally.
 
+The first launch of each new version can take up to half a minute,
+especially from an external drive, before anything appears: macOS is
+checking the app. Later launches are quick. Once the window is up, a line
+at the top says what tableauX is doing (finding the library, measuring
+videos); **Skip** lets you get on with it.
+
 ## Use
 
 The window is where you compose a show: its works, and each work's screens
@@ -55,8 +61,9 @@ stops and returns to setup.
 ## The library: works and shows, on one Mac or several
 
 <!-- [claude] v4 P4b–P4d, from build 0.3.10. -->
-tableauX keeps a **library**: a folder called **tableauX** (in the folder the
-app is in, beside the app, or in your home folder, Movies or the Desktop):
+tableauX keeps a **library**: a folder called **tableauX** beside the app, or
+in your home folder, Movies or the Desktop; or the folder the app itself is
+in, if that folder has a `Works` or `Shows` folder in it:
 
 ```
 tableauX/
@@ -93,9 +100,10 @@ tableauX/
   every Mac as a tile, one row per Mac, from the files on this Mac. Use it
   to check order, timing and which file is on which screen; Esc closes it.
 
-A folder of works without `Works/` (works directly inside, any show file
-beside them) also works, as a library of its own. If tableauX finds no
-library at all, it makes one in **Movies → tableauX** and tells you.
+A `tableauX` folder holding works directly (no `Works/` inside) also
+works, as a library of its own. If tableauX finds no library at all, it
+makes one in **Movies → tableauX** and tells you. (Opened from Downloads,
+it doesn't take Downloads for a library, however many videos are there.)
 
 Each Mac still asks twice the first time: **Open Anyway** (see First launch)
 and **Allow** when macOS asks about finding devices on the local network.

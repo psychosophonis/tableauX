@@ -28,6 +28,11 @@ public enum LinkMessage: Codable, Equatable, @unchecked Sendable {
     /// Conductor → player: the playlist, and each work's length, which every
     /// Mac must use so they all compute the same timeline (§ Timing).
     case show(Show, lengths: [Double])
+    /// [claude] Player → conductor: a person on the player set one of its
+    /// own screens (Mat, 2026-10-22: assign files on the client, "these
+    /// changes should report back to the conductor"). The conductor records
+    /// it in the show and shares the show back.
+    case setScreen(machine: String, work: String, index: Int, panel: PanelConfig)
 }
 
 /// Cutting messages out of a TCP byte stream.
@@ -140,6 +145,21 @@ public enum SharedShow {
                                               firstScreen: first)
             if panels != set { s.works[w].screens[inventory.machine] = panels }
         }
+        return s
+    }
+
+    /// [claude] The show with one screen of one Mac set (a player's own edit,
+    /// LinkMessage.setScreen). The Mac's screens for that work are padded
+    /// with black up to `index`; nothing else changes. An unknown work or a
+    /// Mac not in the show: unchanged.
+    public static func setScreen(_ show: Show, machine: String, work: String, index: Int, panel: PanelConfig) -> Show {
+        guard index >= 0, index < 16, show.machines.contains(where: { $0.name == machine }),
+              let w = show.works.firstIndex(where: { $0.name == work }) else { return show }
+        var s = show
+        var panels = s.works[w].screens[machine] ?? []
+        while panels.count <= index { panels.append(PanelConfig()) }
+        panels[index] = panel
+        s.works[w].screens[machine] = panels
         return s
     }
 

@@ -20,6 +20,19 @@ struct SetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // [claude] Launch indicator (Mat, 2026-10-22): what tableauX is
+            // doing while it finds the library and measures the videos.
+            if let status = model.startupStatus {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(status)
+                    Spacer()
+                    Button("Skip") { model.skipStartup() }
+                        .help("Stop waiting: the window is usable at once (videos are still measured in the background), and a show set to start presenting by itself won't, this time.")
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.1)))
+            }
             ShowRow(model: model)
             TableauSizeRow(model: model)        // [claude] the show's display counts, for every work
             MediaRow(model: model)

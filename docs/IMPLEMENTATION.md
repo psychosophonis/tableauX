@@ -366,6 +366,21 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   "Export show as a library…" in the Show menu, with "Start presenting
   when tableauX opens" and "Open a show from elsewhere…"; New work; Import
   work…. 148 tests. Not looked at in a window yet.
+- 0.3.20 (2026-10-22): launch indicator with Skip; the library search runs
+  after the window is up; startup timings logged. P0 8 h probe at 5 h 20
+  min: memory 38 → 46 → 54 → 59 → 67 MB at hours 1–5, i.e. a steady
+  ~7–8 MB/h, not levelling off: a slow leak in the work-switch cycle
+  (360 swaps/h, far more than a real playlist's ~10–20/h). Final at 17:25.
+- 0.3.21 (2026-10-22): fix from Mat's M5: opened from Downloads, the app
+  took Downloads as its library (its own folder counted if it held any
+  folder of videos): every video folder became a work, one of 16 screens.
+  The app's own folder now needs a Works/ or Shows/ folder or a show file.
+  1 new test (the Downloads case); nothing on the M5 was saved or moved.
+- 0.3.22 (2026-10-22): a player edits its own screens (Mat), sent to the
+  conductor as setScreen and recorded there; linked files outside the
+  player's library are reported under their full path for lengths and the
+  file check, and kept out of the pool. 2 new tests (151). Not run across
+  Macs yet: part of the Wi-Fi run.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen
