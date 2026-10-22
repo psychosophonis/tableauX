@@ -24,11 +24,28 @@ struct SetupView: View {
             // pads to one per display; with no part for this Mac (or no
             // work) there are no rows, and the problem list says why.
             if model.show.works.indices.contains(model.selectedWork) {
+                // [claude] P3b: on a player these show the conductor's
+                // playlist, read-only: an edit here would be overwritten by
+                // the next playlist the conductor sends.
                 WorkSettingsRow(work: $model.show.works[model.selectedWork], length: model.length(of: model.selectedWork))
-                ForEach(Array(model.displays.enumerated()), id: \.element.id) { i, display in
-                    if i < model.panels.count {
-                        PanelRow(number: i + 1, display: display, panel: model.panelBinding(i), model: model)
-                        Divider()
+                    .disabled(model.mode == .player)
+                // [claude] P4a: on the conductor, any Mac's screens.
+                if model.mode == .conductor, !model.otherMachines.isEmpty {
+                    Picker("Screens on", selection: $model.editingMachine) {
+                        Text("This Mac").tag(String?.none)
+                        ForEach(model.otherMachines, id: \.name) { Text($0.name).tag(String?.some($0.name)) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if model.mode == .conductor, let m = model.editingMachine, model.otherMachines.contains(where: { $0.name == m }) {
+                    RemoteScreens(model: model, machine: m)
+                } else {
+                    ForEach(Array(model.displays.enumerated()), id: \.element.id) { i, display in
+                        if i < model.panels.count {
+                            PanelRow(number: i + 1, display: display, panel: model.panelBinding(i), model: model)
+                                .disabled(model.mode == .player)
+                            Divider()
+                        }
                     }
                 }
             }
@@ -120,6 +137,73 @@ private struct PanelRow: View {
     }
 }
 
+/// [claude] P4a: another Mac's screens for the selected work, set from the
+/// conductor using the files that Mac reported (§ Getting works in › Manual).
+/// The file menu is the whole of that Mac's media folder, so a screen can
+/// take any of its files, from any folder: the way to fix files that were
+/// named or numbered wrongly without visiting the Mac.
+private struct RemoteScreens: View {
+    @ObservedObject var model: AppModel
+    let machine: String
+
+    var body: some View {
+        let files = model.reportedFiles(of: machine)
+        VStack(alignment: .leading, spacing: 8) {
+            if model.inventory(of: machine) == nil {
+                Text("\(machine) hasn't reported its files since this Mac became Conductor, so they aren't listed. Its saved screens are shown.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !model.isConnected(machine) {
+                Text("\(machine) isn't connected: its files are as it last reported them. Changes reach it when it reconnects.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            let panels = model.panels(on: machine)
+            if panels.isEmpty { Text("\(machine) has reported no displays yet.").foregroundStyle(.secondary) }
+            ForEach(panels.indices, id: \.self) { i in
+                RemotePanelRow(number: i + 1, machine: machine, files: files, panel: model.panelBinding(on: machine, i))
+                Divider()
+            }
+        }
+    }
+}
+
+private struct RemotePanelRow: View {
+    let number: Int
+    let machine: String
+    let files: [(path: String, file: InventoryFile)]
+    @Binding var panel: PanelConfig
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(machine), display \(number)").font(.headline)
+            HStack(spacing: 16) {
+                Picker("File", selection: $panel.file) {
+                    Text("None: this display stays black").tag(String?.none)
+                    // A saved file the Mac no longer reports stays visible,
+                    // marked, rather than silently vanishing from the menu.
+                    if let f = panel.file, !files.contains(where: { $0.path == f }) {
+                        Text("\(f) (not reported)").tag(String?.some(f))
+                    }
+                    ForEach(files, id: \.path) { Text($0.path).tag(String?.some($0.path)) }
+                }
+                .frame(maxWidth: 420)
+                Toggle("Audio", isOn: $panel.audio).disabled(info?.hasAudio == false)
+                Picker("Scaling", selection: $panel.scaling) {
+                    Text("Fit").tag(Scaling.fit)
+                    Text("Fill").tag(Scaling.fill)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
+            }
+            if let info {
+                Text(String(format: "%.1f s  ·  %.0f fps%@", info.duration, info.fps, info.hasAudio ? "" : "  ·  no audio track"))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var info: InventoryFile? { panel.file.flatMap { f in files.first(where: { $0.path == f })?.file } }
+}
+
 /// [claude] This Mac's media folder and the Scan button (§ v4 › Getting
 /// works in). A setting of this Mac, not of the show, like the mode.
 private struct MediaRow: View {
@@ -128,15 +212,20 @@ private struct MediaRow: View {
     var body: some View {
         HStack {
             Text("Media folder:")
-            Text(model.mediaFolder.isEmpty ? "none chosen" : model.mediaFolder)
+            // [claude] P4b: say where the folder came from, or where it was
+            // looked for, so a Mac that found nothing says what to do.
+            Text(model.mediaFolder.isEmpty
+                 ? "no \(ShowFolder.name) folder found (looked beside the app, and in your home folder, Movies and Desktop)"
+                 : model.mediaFolder)
                 .foregroundStyle(model.mediaFolder.isEmpty ? .secondary : .primary)
                 .lineLimit(1).truncationMode(.head)
-                .help(model.mediaFolder)
+                .help(model.mediaFolder.isEmpty ? "" : "\(model.mediaFolder): \(model.mediaSource)")
             Spacer()
             Button("Choose…") { model.chooseMediaFolder() }
             Button("Scan") { model.scan() }.disabled(model.mediaFolder.isEmpty)
                 .help("Each subfolder is a work; its videos go on the displays in name order.")
             Button("Import folder…") { model.importFolder() }
+                .disabled(model.mode == .player)      // a player's works come from the conductor
                 .help("Add works from a folder anywhere, linked where they are (not copied). The folder's own videos are one work; each folder inside it is another.")
         }
     }
@@ -157,6 +246,11 @@ private struct PlaylistList: View {
                 Toggle("Loop", isOn: $model.show.playlist.loop)
                     .help("Back to the first work after the last.")
             }
+            .disabled(model.mode == .player)
+            if model.mode == .player {
+                Text("This is the conductor's playlist. Change it on the conductor; Scan here sends this Mac's files to it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(Array(model.show.works.enumerated()), id: \.offset) { w, work in
                 HStack {
                     Text("\(w + 1). \(work.name)")
@@ -164,9 +258,12 @@ private struct PlaylistList: View {
                     Text(summary(w, work)).foregroundStyle(.secondary)
                     Spacer()
                     if w == model.selectedWork {
-                        Button("↑") { model.moveWork(w, by: -1) }.disabled(w == 0)
-                        Button("↓") { model.moveWork(w, by: 1) }.disabled(w == model.show.works.count - 1)
-                        Button("Remove") { model.removeWork(w) }
+                        Group {
+                            Button("↑") { model.moveWork(w, by: -1) }.disabled(w == 0)
+                            Button("↓") { model.moveWork(w, by: 1) }.disabled(w == model.show.works.count - 1)
+                            Button("Remove") { model.removeWork(w) }
+                        }
+                        .disabled(model.mode == .player)
                         Button("Collect…") { model.collectWork(w) }.disabled(model.collecting != nil)
                             .help("Copy this work's files on this Mac into one folder, for archiving.")
                     }
@@ -179,6 +276,7 @@ private struct PlaylistList: View {
             HStack {
                 Button("Add work") { model.addWork() }
                     .help("A work set up by hand: choose its files below.")
+                    .disabled(model.mode == .player)
                 Spacer()
                 if let progress = model.collecting { Text(progress).foregroundStyle(.secondary) }
                 Button("Collect show…") { model.collectShow() }
@@ -273,6 +371,15 @@ private struct NetworkRow: View {
             }
             if !model.clockStatus.isEmpty {
                 Text(model.clockStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+            // [claude] P3b: the playlist link, beside the clock.
+            if model.mode == .conductor {
+                Text(model.playerLines.isEmpty ? "Playlist link: no players connected." : "Players: " + model.playerLines.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if model.mode == .player {
+                Text(model.sharedLengths.map { "Playing the conductor's playlist: \($0.count) work\($0.count == 1 ? "" : "s")." }
+                     ?? (model.linkUp ? "Connected; waiting for the conductor's playlist…" : "Playlist link: connecting to the conductor…"))
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

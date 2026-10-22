@@ -120,8 +120,8 @@ final class Playback {
     /// reports each change here. Nil on a player, which follows (see `follow`).
     private let onStateChange: ((ShowState) -> Void)?
     private var leads: Bool { onStateChange != nil }
-    /// [claude] → and ← (P2: one Mac only; across Macs they need P3's state
-    /// with a work index, so AppModel turns them off in network modes).
+    /// [claude] → and ←. Only a leader acts on them; since P3a the state
+    /// carries the work index, so players follow (see `follow`).
     private let allowSkip: Bool
     private let onWindowsUp: () -> Void
     private let onEnd: () -> Void
@@ -190,13 +190,15 @@ final class Playback {
     private func log(_ s: String) { NSLog("playlist: %@", s) }
 
     private func report(_ phase: ShowState.Phase) {
-        onStateChange?(ShowState(version: hostNanos(), phase: phase, start: anchor.start, pausedAt: pausedAt ?? 0))
+        onStateChange?(ShowState(version: hostNanos(), phase: phase, start: anchor.start, pausedAt: pausedAt ?? 0,
+                                 index: anchor.index))
     }
 
     /// Starts the show. A leader (conductor, standalone) loads the first
     /// work and starts it 1 s after its panels are ready; a player passes the
-    /// conductor's `start` and joins the timeline from it.
-    func start(following start: Double? = nil) {
+    /// conductor's anchor (work `index` starts at `start`) and joins the
+    /// timeline from it.
+    func start(following anchorIn: (index: Int, start: Double)? = nil) {
         // Build windows first, so every display goes black at once even while
         // the videos are still loading.
         for screen in screens { windows.append(makeWindow(on: screen)) }
@@ -210,8 +212,8 @@ final class Playback {
         driftTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkDrift() }
         }
-        if let start {
-            anchor = (0, start)
+        if let anchorIn, works.indices.contains(anchorIn.index) {
+            anchor = anchorIn
             started = true
             advance()
         } else {
@@ -555,12 +557,29 @@ final class Playback {
             pause(at: s.pausedAt)
             log("follow: paused")
         case .playing:
-            // Same start and not paused: already doing this. (1 µs: the start
+            // Same anchor and not paused: already doing this. (1 µs: the start
             // travels as whole nanoseconds.)
-            guard pausedAt != nil || abs(s.start - anchor.start) > 1e-6 else { return }
-            shift(by: s.start - anchor.start)
-            pausedAt = nil
-            log("follow: playing")
+            let moved = s.index != anchor.index || abs(s.start - anchor.start) > 1e-6
+            guard pausedAt != nil || moved else { return }
+            guard works.indices.contains(s.index) else { return }   // a playlist this Mac doesn't have
+            if pausedAt != nil {
+                // A RESUME: the conductor moved the whole timeline later by
+                // the pause, so the loaded work shifts with it and carries on.
+                shift(by: s.start - anchor.start)
+                anchor.index = s.index
+                pausedAt = nil
+                log("follow: playing")
+            } else {
+                // [claude] P3a: a new anchor while playing is → or ← on the
+                // conductor. Same as a skip here: black now, the target work
+                // after the gap. Telling the two apart by "was I paused?"
+                // works because the conductor can't skip while paused.
+                anchor = (s.index, s.start)
+                unload()
+                generation += 1
+                loading = nil
+                log("follow: \(works[s.index].name)")
+            }
             advance()
         case .stopped:
             break

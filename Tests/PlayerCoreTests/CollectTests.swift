@@ -11,9 +11,11 @@ final class CollectTests: XCTestCase {
         let w = Work(name: "Smith", screens: ["A": [panel("Smith/1.mp4", audio: true), panel(nil), panel("/Users/x/Desktop/2.mov")]],
                      repeat: .times(2), shorter: .loop)
         let p = Collect.plan(works: [w], machine: "A", resolve: resolve)
-        XCTAssertEqual(p.copies, [.init(source: "/Media/Smith/1.mp4", dest: "Smith/1.mp4"),
-                                  .init(source: "/Users/x/Desktop/2.mov", dest: "Smith/2.mov")])
-        XCTAssertEqual(p.works[0].screens["A"]?.map(\.file), ["Smith/1.mp4", nil, "Smith/2.mov"])
+        // Screen 2 is black, which a scan of "1.mp4, 2.mov" wouldn't keep, so
+        // the copies are named for their screens (Mat's "_N", 2026-10-22).
+        XCTAssertEqual(p.copies, [.init(source: "/Media/Smith/1.mp4", dest: "Smith/1_1.mp4"),
+                                  .init(source: "/Users/x/Desktop/2.mov", dest: "Smith/2_3.mov")])
+        XCTAssertEqual(p.works[0].screens["A"]?.map(\.file), ["Smith/1_1.mp4", nil, "Smith/2_3.mov"])
         // Everything but the paths is kept.
         XCTAssertEqual(p.works[0].screens["A"]?[0].audio, true)
         XCTAssertEqual(p.works[0].repeat, .times(2))
@@ -37,15 +39,41 @@ final class CollectTests: XCTestCase {
     func testOneFileOnTwoScreensIsCopiedOnce() {
         let w = Work(name: "W", screens: ["A": [panel("W/1.mp4"), panel("W/1.mp4")]])
         let p = Collect.plan(works: [w], machine: "A", resolve: resolve)
-        XCTAssertEqual(p.copies.map(\.dest), ["W/1.mp4"])
-        XCTAssertEqual(p.works[0].screens["A"]?.map(\.file), ["W/1.mp4", "W/1.mp4"])
+        // Named for its first screen; the show file keeps it on both.
+        XCTAssertEqual(p.copies.map(\.dest), ["W/1_1.mp4"])
+        XCTAssertEqual(p.works[0].screens["A"]?.map(\.file), ["W/1_1.mp4", "W/1_1.mp4"])
     }
 
     func testSameNameFromTwoPlacesGetsANumberIgnoringCase() {
         let w = Work(name: "W", screens: ["A": [panel("/a/Clip.mp4"), panel("/b/clip.mp4"), panel("/c/clip.mp4")]])
         let p = Collect.plan(works: [w], machine: "A", resolve: resolve)
-        XCTAssertEqual(p.copies.map(\.dest), ["W/Clip.mp4", "W/clip 2.mp4", "W/clip 3.mp4"])
-        XCTAssertEqual(p.works[0].screens["A"]?.map(\.file), ["W/Clip.mp4", "W/clip 2.mp4", "W/clip 3.mp4"])
+        // "clip 2" sorts before "Clip" (a space before a dot), so name order
+        // wouldn't restore the screens: numbered too.
+        XCTAssertEqual(p.copies.map(\.dest), ["W/Clip_1.mp4", "W/clip 2_2.mp4", "W/clip 3_3.mp4"])
+        XCTAssertEqual(p.works[0].screens["A"]?.map(\.file), ["W/Clip_1.mp4", "W/clip 2_2.mp4", "W/clip 3_3.mp4"])
+    }
+
+    /// When a scan of the names would put them back the same, names are kept.
+    func testNamesAreKeptWhenTheScanWouldRestoreThem() {
+        let w = Work(name: "W", screens: ["A": [panel("W/a.mp4"), panel("W/b.mp4")]])
+        XCTAssertEqual(Collect.plan(works: [w], machine: "A", resolve: resolve).copies.map(\.dest), ["W/a.mp4", "W/b.mp4"])
+    }
+
+    /// A Mac whose screens start at 4 (after a 3-display Mac) numbers 4, 5…;
+    /// a file already carrying its right number keeps its name.
+    func testNumbersCountAcrossTheTableau() {
+        let w = Work(name: "W", screens: ["B": [panel("W/x_4.mov"), panel(nil), panel("W/y.mov")]])
+        let p = Collect.plan(works: [w], machine: "B", resolve: resolve, firstScreen: 4)
+        XCTAssertEqual(p.copies.map(\.dest), ["W/x_4.mov", "W/y_6.mov"])
+    }
+
+    /// The point of it: collect, then scan the archive, gives the same screens.
+    func testANumberedArchiveScansBackToTheSameScreens() {
+        let panels = [panel("/s/intro.mov"), panel(nil), panel("/s/end.mov")]
+        let p = Collect.plan(works: [Work(name: "W", screens: ["A": panels])], machine: "A", resolve: resolve)
+        let names = p.copies.map { ($0.dest as NSString).lastPathComponent }
+        XCTAssertEqual(FolderScan.assign(folder: "W", files: names, displays: 3).panels.map(\.file),
+                       p.works[0].screens["A"]?.map(\.file))
     }
 
     func testUnsafeAndRepeatedWorkNamesGetSafeDistinctFolders() {

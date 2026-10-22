@@ -20,7 +20,11 @@ struct MediaInfo: Equatable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var displays: [DisplayInfo] = []
-    @Published var show = Show(machines: [Machine(name: AppModel.thisMac)])
+    @Published var show = Show(machines: [Machine(name: AppModel.thisMac)]) {
+        // [claude] P3b: a conductor's players must always have its latest
+        // playlist, so every change is shared (coalesced, see scheduleShare).
+        didSet { if mode == .conductor { scheduleShare() } }
+    }
     @Published private(set) var media: [String: MediaInfo] = [:]     // keyed by file path
     @Published private(set) var unreadable: Set<String> = []
     @Published private(set) var showPath: URL?
@@ -52,10 +56,13 @@ final class AppModel: ObservableObject {
 
     /// This Mac's media folder (§ v4 › Getting works in): a setting per Mac,
     /// like the mode, because each Mac holds its own files.
-    @Published var mediaFolder = "" {
-        didSet { UserDefaults.standard.set(mediaFolder, forKey: mediaKey) }
-    }
+    /// [claude] P4b: found at launch (ShowFolder.pick) unless one was chosen
+    /// by hand; only a folder chosen by hand is saved (see chooseMediaFolder),
+    /// so a folder found by looking is looked for again next time.
+    @Published var mediaFolder = ""
     private let mediaKey = "mediaFolder"
+    /// Where the media folder came from, for setup ("next to the app", …).
+    @Published private(set) var mediaSource = ""
 
     /// A panel's file as a full path: relative paths are inside the media folder.
     func resolve(_ file: String) -> String {
@@ -92,10 +99,82 @@ final class AppModel: ObservableObject {
         show.works[selectedWork].screens[name] = ps
     }
 
-    /// One play of work `w` on this Mac: its longest file here (§ v4 ›
-    /// Playing). P2 is one Mac; P3 takes the longest across Macs.
-    func length(of w: Int) -> Double {
+    // MARK: Another Mac's screens, set from the conductor (v4 P4a) [claude]
+
+    /// Whose screens setup is showing: nil = this Mac's. Conductor only:
+    /// § Getting works in › Manual, "a player's screen is chosen from the
+    /// files that player reported, without visiting it".
+    @Published var editingMachine: String?
+
+    /// The other Macs in the show, in screen-numbering order.
+    var otherMachines: [Machine] { show.machines.filter { $0.name != machineName } }
+
+    /// Machine `m`'s panels for the selected work, one per display it has
+    /// (as it last reported, or as saved).
+    func panels(on m: String) -> [PanelConfig] {
+        guard show.works.indices.contains(selectedWork) else { return [] }
+        let count = show.machines.first(where: { $0.name == m })?.displays ?? 0
+        var ps = show.works[selectedWork].screens[m] ?? []
+        while ps.count < count { ps.append(PanelConfig()) }
+        return ps
+    }
+
+    /// The same BINDING idea as `panelBinding`, for another Mac. Writing
+    /// changes the show, and the show's didSet shares it with the players.
+    func panelBinding(on m: String, _ i: Int) -> Binding<PanelConfig> {
+        Binding(get: { [weak self] in
+            guard let self else { return PanelConfig() }
+            let ps = self.panels(on: m)
+            return i < ps.count ? ps[i] : PanelConfig()
+        }, set: { [weak self] new in
+            guard let self, self.show.works.indices.contains(self.selectedWork) else { return }
+            var ps = self.panels(on: m)
+            guard i < ps.count else { return }
+            ps[i] = new
+            self.show.works[self.selectedWork].screens[m] = ps
+        })
+    }
+
+    /// What machine `m` last reported this session, connected now or not.
+    func inventory(of m: String) -> Inventory? { reported[m] }
+
+    func isConnected(_ m: String) -> Bool { players.values.contains { $0.machine == m } }
+
+    /// Every video machine `m` reported, as the path a panel stores
+    /// ("Folder/file", relative to that Mac's media folder), in folder then
+    /// name order: the choices for its screens.
+    func reportedFiles(of m: String) -> [(path: String, file: InventoryFile)] {
+        guard let inv = inventory(of: m) else { return [] }
+        return inv.folders.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.flatMap { folder in
+            inv.folders[folder, default: []]
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                .map { ("\(folder)/\($0.name)", $0) }
+        }
+    }
+
+    /// [claude] The tableau screen number of this Mac's display 1, for files
+    /// named "_N" (Mat, 2026-10-22): 1 unless Macs come before it in the show.
+    var firstScreen: Int { machineName.map { SharedShow.firstScreen(show, of: $0) } ?? 1 }
+
+    /// One play of work `w` on this Mac's own files: its longest file here.
+    func ownLength(of w: Int) -> Double {
         panels(of: w).prefix(displays.count).compactMap { $0.file.flatMap { media[resolve($0)]?.duration } }.max() ?? 0
+    }
+
+    /// One play of work `w` (§ v4 › Playing): its longest file on ANY Mac.
+    /// [claude] P3b: every Mac must time the playlist by the same numbers,
+    /// so a conductor takes the longest across its own files and every
+    /// player's inventory, and a player uses exactly what the conductor sent.
+    func length(of w: Int) -> Double {
+        switch mode {
+        case .standalone: return ownLength(of: w)
+        case .conductor:
+            guard show.works.indices.contains(w) else { return 0 }
+            return max(ownLength(of: w), PlaylistMerge.length(of: show.works[w], in: Array(reported.values)))
+        case .player:
+            guard let lengths = sharedLengths, lengths.indices.contains(w) else { return ownLength(of: w) }
+            return lengths[w]
+        }
     }
 
     func addWork() {
@@ -122,6 +201,98 @@ final class AppModel: ObservableObject {
         p.canChooseDirectories = true
         guard p.runModal() == .OK, let url = p.url else { return }
         mediaFolder = url.path
+        mediaSource = "chosen by hand"
+        UserDefaults.standard.set(url.path, forKey: mediaKey)
+    }
+
+    // MARK: Zero setup (v4 P4b) [claude]
+
+    /// The folder this app is in, as the person put it there. A quarantined
+    /// app (downloaded, AirDropped) opened where it was unzipped is run by
+    /// macOS from a hidden read-only copy (APP TRANSLOCATION), so its own
+    /// path says nothing about the folder it came in. Security.framework can
+    /// give the original path; the function isn't in the public headers, so
+    /// it is looked up at run time, and if that fails the app's folder is
+    /// simply not used (the other places are still searched).
+    static var appFolder: String? {
+        var url = Bundle.main.bundleURL
+        if url.path.contains("/AppTranslocation/") {
+            typealias Original = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
+            guard let lib = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY),
+                  let sym = dlsym(lib, "SecTranslocateCreateOriginalPathForURL"),
+                  let original = unsafeBitCast(sym, to: Original.self)(url as CFURL, nil)?.takeRetainedValue() as URL? else {
+                NSLog("folder: app is translocated and its original folder couldn't be found")
+                return nil
+            }
+            url = original
+        }
+        return url.deletingLastPathComponent().path
+    }
+
+    /// A folder's files and its subfolders' listings, or nil if it isn't a folder.
+    private static func listing(_ path: String) -> (files: [String], subfolders: [String: [String]])? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue,
+              let names = try? fm.contentsOfDirectory(atPath: path) else { return nil }
+        var files: [String] = [], subs: [String: [String]] = [:]
+        for n in names {
+            let p = (path as NSString).appendingPathComponent(n)
+            var d: ObjCBool = false
+            if fm.fileExists(atPath: p, isDirectory: &d), d.boolValue, !n.hasSuffix(".app") {
+                subs[n] = (try? fm.contentsOfDirectory(atPath: p)) ?? []
+            } else {
+                files.append(n)
+            }
+        }
+        return (files, subs)
+    }
+
+    /// Show files in the media folder, with their dates.
+    private func folderShows() -> [(path: String, modified: Double)] {
+        guard !mediaFolder.isEmpty, let l = Self.listing(mediaFolder) else { return [] }
+        return ShowFolder.shows(in: l.files).map { name in
+            let p = (mediaFolder as NSString).appendingPathComponent(name)
+            let d = (try? FileManager.default.attributesOfItem(atPath: p)[.modificationDate] as? Date) ?? nil
+            return (p, d?.timeIntervalSince1970 ?? 0)
+        }
+    }
+
+    /// Launch: find the media folder, open the show, pick the role
+    /// (§ v4 › Zero setup). Runs once, from init, before the clock starts.
+    private func findEverything() {
+        let chosen = UserDefaults.standard.string(forKey: mediaKey)
+        let app = Self.appFolder
+        mediaFolder = ShowFolder.pick(chosen: chosen, appFolder: app, home: NSHomeDirectory(), listing: Self.listing) ?? ""
+        mediaSource = mediaFolder.isEmpty ? ""
+            : mediaFolder == chosen ? "chosen by hand"
+            : mediaFolder == app ? "the folder tableauX is in"
+            : "found by name"
+        NSLog("folder: %@ (%@)", mediaFolder.isEmpty ? "none found" : mediaFolder, mediaSource)
+
+        let shows = folderShows()
+        if let path = ShowFolder.showToOpen(last: UserDefaults.standard.string(forKey: lastShowKey),
+                                            folder: mediaFolder.isEmpty ? nil : mediaFolder,
+                                            folderChosen: mediaFolder == chosen, folderShows: shows),
+           FileManager.default.fileExists(atPath: path) {
+            open(URL(fileURLWithPath: path))
+        }
+
+        // The role. A mode saved by a build before P4b counts as chosen by
+        // hand, so updating never flips a Mac's role behind someone's back.
+        let d = UserDefaults.standard
+        if d.object(forKey: modeByHandKey) == nil, d.string(forKey: modeKey) != nil { d.set(true, forKey: modeByHandKey) }
+        if d.bool(forKey: modeByHandKey), let saved = d.string(forKey: modeKey).flatMap(Mode.init) {
+            mode = saved
+        } else {
+            // The folder decides (Mat): a show file in it = Conductor; works
+            // but no show = Player; no folder at all = Standalone.
+            mode = !shows.isEmpty ? .conductor : mediaFolder.isEmpty ? .standalone : .player
+            NSLog("folder: role %@, from the folder", mode.rawValue)
+        }
+        // A conductor or standalone show opened with no works yet: fill it
+        // from the folder, so a folder of works plays without a Scan.
+        if mode != .player, show.works.isEmpty, !mediaFolder.isEmpty { scan() }
     }
 
     /// Scans the media folder: each subfolder is a work, its videos go on
@@ -129,6 +300,9 @@ final class AppModel: ObservableObject {
     /// playlist so works already set up keep their settings (PlaylistMerge).
     /// Only the listing is read here; durations load in the background.
     func scan() {
+        // [claude] P3b: a player's works come from the conductor, so its
+        // Scan sends a fresh inventory, which the conductor folds in.
+        if mode == .player { sentInventory = nil; refreshInventory(); return }
         guard !mediaFolder.isEmpty, let name = machineName else { return }
         let fm = FileManager.default
         guard let folders = try? fm.contentsOfDirectory(atPath: mediaFolder) else {
@@ -146,10 +320,11 @@ final class AppModel: ObservableObject {
             guard !videos.isEmpty else { continue }
             // Durations aren't known yet; the merge only needs the names.
             inventory[folder] = videos.map { InventoryFile(name: $0, duration: 0) }
-            let extra = FolderScan.assign(folder: folder, files: videos, displays: displays.count).leftOver
+            let extra = FolderScan.assign(folder: folder, files: videos, displays: displays.count, firstScreen: firstScreen).leftOver
             if !extra.isEmpty { left[folder] = extra }
         }
-        show.works = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: displays.count, folders: inventory)])
+        show.works = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: displays.count, folders: inventory)],
+                                         firstScreens: [name: firstScreen])
         leftOver = left
         lastError = nil
         NSLog("scan: %d work(s) in %@", inventory.count, mediaFolder)
@@ -170,11 +345,10 @@ final class AppModel: ObservableObject {
         guard let name = machineName else { return }
         for w in show.works.indices {
             let set = show.works[w].screens[name] ?? []
-            let parents = Set(set.compactMap(\.file).map { ($0 as NSString).deletingLastPathComponent })
-            guard let folder = parents.count == 1 ? parents.first : parents.isEmpty && !mediaFolder.isEmpty ? show.works[w].name : nil,
-                  !folder.isEmpty,
+            guard let folder = FolderScan.folder(of: set, work: show.works[w].name),
+                  folder.hasPrefix("/") || !mediaFolder.isEmpty,
                   let files = try? FileManager.default.contentsOfDirectory(atPath: resolve(folder)) else { continue }
-            let (panels, left) = FolderScan.fill(set, folder: folder, files: files, displays: displays.count)
+            let (panels, left) = FolderScan.fill(set, folder: folder, files: files, displays: displays.count, firstScreen: firstScreen)
             if panels != set {
                 show.works[w].screens[name] = panels
                 NSLog("fill: %@ now on %d display(s)", show.works[w].name, panels.count)
@@ -220,7 +394,7 @@ final class AppModel: ObservableObject {
             }
         }
         let r = FolderImport.works(root: url.path, rootFiles: files, subfolders: subfolders, machine: name,
-                                   displays: displays.count, existing: Set(show.works.map(\.name)))
+                                   displays: displays.count, existing: Set(show.works.map(\.name)), firstScreen: firstScreen)
         show.works += r.works
         leftOver.merge(r.leftOver) { $1 }
         if !r.works.isEmpty { selectedWork = show.works.count - r.works.count }
@@ -267,7 +441,7 @@ final class AppModel: ObservableObject {
     private func collect(_ indices: [Int], into root: URL, showFile: String?) {
         guard collecting == nil, let name = machineName else { return }
         let plan = Collect.plan(works: indices.map { show.works[$0] }, machine: name, resolve: resolve,
-                                takenFolders: Self.namesIn(root))
+                                takenFolders: Self.namesIn(root), firstScreen: firstScreen)
         let fm = FileManager.default
         let missing = plan.copies.filter { !fileExists($0.source) }
         let copies = plan.copies.filter { fileExists($0.source) }
@@ -330,9 +504,12 @@ final class AppModel: ObservableObject {
     @Published var mode: Mode = .standalone {
         didSet {
             UserDefaults.standard.set(mode.rawValue, forKey: modeKey)
-            if clockReady { restartClock() }
+            // [claude] P4b: a change after launch is a person choosing; from
+            // then on the folder no longer decides this Mac's role.
+            if clockReady { UserDefaults.standard.set(true, forKey: modeByHandKey); restartClock() }
         }
     }
+    private let modeByHandKey = "modeChosenByHand"
     /// False until init has restored the saved mode. Without it, restoring the
     /// mode in init started the clock once from `didSet` and again from init's
     /// own call (observed 2026-10-21: the second bind found the port taken).
@@ -358,13 +535,9 @@ final class AppModel: ObservableObject {
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChanged() }
         }
-        mediaFolder = UserDefaults.standard.string(forKey: mediaKey) ?? ""
-        if let path = UserDefaults.standard.string(forKey: lastShowKey) {
-            open(URL(fileURLWithPath: path))
-        }
-        // Restore the saved mode, then start the clock exactly once.
+        // Find the folder, show and role (P4b), then start the clock exactly once.
         conductorAddress = UserDefaults.standard.string(forKey: addressKey) ?? ""
-        mode = UserDefaults.standard.string(forKey: modeKey).flatMap(Mode.init) ?? .standalone
+        findEverything()
         clockReady = true
         restartClock()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -380,6 +553,8 @@ final class AppModel: ObservableObject {
         if isPlaying { stop() }
         server?.stop(); server = nil
         client?.stop(); client = nil
+        stopLink()
+        defer { startLink() }       // [claude] P3b: the link follows the mode, as the clock does
         follower = StateFollower()
         dismissedVersion = nil
         do {
@@ -387,14 +562,10 @@ final class AppModel: ObservableObject {
             case .standalone: break
             case .conductor: server = try ClockServer()
             case .player:
+                // [claude] P4b: with no address typed, the link finds the
+                // conductor by Bonjour and starts the clock on it (linkConnected).
                 let address = conductorAddress.trimmingCharacters(in: .whitespaces)
-                if !address.isEmpty {
-                    // States arrive on the clock's receive thread; hop to the
-                    // main actor, which owns playback.
-                    client = try ClockClient(conductor: address) { [weak self] s in
-                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(s) } }
-                    }
-                }
+                if !address.isEmpty { try startClockClient(address) }
             }
         } catch {
             clockStatus = "Clock: \(error)"
@@ -404,6 +575,19 @@ final class AppModel: ObservableObject {
         NSLog("clock: mode %@", mode.rawValue)
         updateClockStatus()
     }
+
+    private func startClockClient(_ address: String) throws {
+        // States arrive on the clock's receive thread; hop to the main
+        // actor, which owns playback.
+        client = try ClockClient(conductor: address) { [weak self] s in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(s) } }
+        }
+    }
+
+    /// [claude] P4b: the conductor found by Bonjour (nil = none yet, or an
+    /// address was typed), and the names seen when there are several.
+    @Published private(set) var foundConductor: (name: String, ipv4: String)?
+    @Published private(set) var severalConductors: [String] = []
 
     /// Once a second: refresh the status line; every 10 s, also log it, so a
     /// long run can be read back afterwards with `log show`.
@@ -439,9 +623,213 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: The link: one playlist for every Mac (v4 P3b) [claude]
+
+    /// What the conductor knows about one connected player.
+    struct PlayerLink {
+        var machine: String?
+        var build: String?
+        var inventory: Inventory?
+        var blocking: [String]?          // nil = hasn't reported yet
+    }
+
+    /// Conductor: every player connected over the link, by connection.
+    @Published private(set) var players: [ObjectIdentifier: PlayerLink] = [:]
+    /// Conductor: each Mac's last inventory, KEPT when it disconnects. Work
+    /// lengths come from these, so a player dropping off Wi-Fi doesn't
+    /// change the timeline under the others, and its files stay choosable
+    /// in setup (P4a).
+    @Published private(set) var reported: [String: Inventory] = [:]
+    /// Player: the conductor's work lengths; nil until its playlist arrives.
+    @Published private(set) var sharedLengths: [Double]?
+    @Published private(set) var linkUp = false
+    private var linkServer: LinkServer?
+    private var linkClient: LinkClient?
+    private var shareScheduled = false
+    private var sentInventory: Inventory?
+    private var sentReport: [String]?
+    /// Player: each media file's size and date when last measured, so a
+    /// file replaced under the same name is measured again.
+    private var stamps: [String: (Int64, Double)] = [:]
+
+    static let build = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+
+    private func startLink() {
+        switch mode {
+        case .standalone: break
+        case .conductor:
+            do {
+                linkServer = try LinkServer(
+                    advertiseAs: Self.thisMac,
+                    onMessage: { [weak self] m, id in DispatchQueue.main.async { MainActor.assumeIsolated { self?.conductorReceived(m, from: id) } } },
+                    onClose: { [weak self] id in DispatchQueue.main.async { MainActor.assumeIsolated { _ = self?.players.removeValue(forKey: id) } } })
+            } catch {
+                clockStatus = "Link: couldn't listen on TCP port \(Link.port): \(error)"
+            }
+        case .player:
+            // [claude] P4b: no address typed = find the conductor by Bonjour.
+            let address = conductorAddress.trimmingCharacters(in: .whitespaces)
+            linkClient = LinkClient(
+                conductor: address.isEmpty ? nil : address,
+                onConnected: { [weak self] name, ip in DispatchQueue.main.async { MainActor.assumeIsolated { self?.linkConnected(name: name, ipv4: ip) } } },
+                onMessage: { [weak self] m in DispatchQueue.main.async { MainActor.assumeIsolated { self?.playerReceived(m) } } },
+                onDisconnected: { [weak self] in DispatchQueue.main.async { MainActor.assumeIsolated { self?.linkUp = false } } },
+                onSeveral: { [weak self] names in DispatchQueue.main.async { MainActor.assumeIsolated { self?.severalConductors = names } } })
+        }
+    }
+
+    private func stopLink() {
+        linkServer?.stop(); linkServer = nil
+        linkClient?.stop(); linkClient = nil
+        players = [:]
+        reported = [:]
+        sharedLengths = nil
+        linkUp = false
+        foundConductor = nil
+        severalConductors = []
+    }
+
+    // Conductor side.
+
+    private func conductorReceived(_ m: LinkMessage, from id: ObjectIdentifier) {
+        guard mode == .conductor else { return }
+        switch m {
+        case .hello(let machine, let build):
+            players[id] = PlayerLink(machine: machine, build: build)
+            NSLog("link: hello from %@ (build %@)", machine, build)
+            shareShow(to: id)
+        case .inventory(let inv):
+            players[id, default: PlayerLink()].machine = inv.machine
+            players[id]?.inventory = inv
+            reported[inv.machine] = inv
+            NSLog("link: inventory from %@: %d folder(s), %d display(s)", inv.machine, inv.folders.count, inv.displays)
+            // Folding it in changes the show, whose didSet shares it again,
+            // now with this player's files and lengths in it.
+            show = SharedShow.merge(show, with: inv, conductor: Self.thisMac)
+            scheduleShare()                  // lengths may change even if the show doesn't
+        case .report(let machine, let blocking):
+            players[id, default: PlayerLink()].machine = machine
+            players[id]?.blocking = blocking
+        case .show:
+            break                            // only a conductor sends these
+        }
+    }
+
+    /// Shares the show on the next turn of the run loop. COALESCING: an edit
+    /// can change the show many times in one go (a scan touches every work),
+    /// and the players only need the result.
+    private func scheduleShare() {
+        guard mode == .conductor, !shareScheduled else { return }
+        shareScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.shareScheduled = false
+                self?.shareShow(to: nil)
+            }
+        }
+    }
+
+    private func shareShow(to id: ObjectIdentifier?) {
+        guard let linkServer else { return }
+        linkServer.send(.show(show, lengths: show.works.indices.map(length(of:))), to: id)
+    }
+
+    // Player side.
+
+    private func linkConnected(name: String, ipv4: String?) {
+        linkUp = true
+        severalConductors = []
+        // [claude] P4b: a conductor found by Bonjour also gets this Mac's
+        // clock pointed at it (the clock needs an address; discovery gives
+        // the link one, so the clock follows the link). A typed address
+        // already started the clock in restartClock.
+        if conductorAddress.trimmingCharacters(in: .whitespaces).isEmpty, let ipv4, foundConductor?.ipv4 != ipv4 {
+            client?.stop()
+            client = nil
+            follower = StateFollower()
+            do { try startClockClient(ipv4) } catch { clockStatus = "Clock: \(error)" }
+            foundConductor = (name, ipv4)
+            NSLog("clock: following %@ at %@ (found on the network)", name, ipv4)
+        }
+        sentInventory = nil
+        sentReport = nil
+        linkClient?.send(.hello(machine: Self.thisMac, build: Self.build))
+        refreshInventory()
+    }
+
+    private func playerReceived(_ m: LinkMessage) {
+        guard mode == .player, case .show(let s, let lengths) = m else { return }
+        guard s != show || lengths != sharedLengths else { return }
+        // The conductor's playlist replaces this Mac's: one show, everywhere.
+        // A player's own show file isn't used in Player mode.
+        show = s
+        sharedLengths = lengths
+        selectedWork = min(selectedWork, max(s.works.count - 1, 0))
+        NSLog("link: playlist from the conductor: %d work(s)", s.works.count)
+        loadAllInfo()
+        sendReport()
+    }
+
+    /// Player, every 5 s and on connecting: list the media folder; measure
+    /// any file that is new or changed; once everything is measured, send
+    /// the inventory if it differs from the last one sent. This is the
+    /// "still has what it reported" check (§ Media on several Macs): a file
+    /// renamed, replaced or removed shows up within 5 s.
+    private func refreshInventory() {
+        guard mode == .player, linkUp, !mediaFolder.isEmpty else { return }
+        let fm = FileManager.default
+        var folders: [String: [InventoryFile]] = [:]
+        var complete = true
+        for folder in (try? fm.contentsOfDirectory(atPath: mediaFolder)) ?? [] where !folder.hasPrefix(".") {
+            let dir = (mediaFolder as NSString).appendingPathComponent(folder)
+            guard let names = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            var files: [InventoryFile] = []
+            for name in FolderScan.videos(names) {
+                let path = (dir as NSString).appendingPathComponent(name)
+                guard let a = try? fm.attributesOfItem(atPath: path) else { continue }
+                let stamp = ((a[.size] as? Int64) ?? 0, (a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
+                if let old = stamps[path], old != stamp { media[path] = nil; unreadable.remove(path) }
+                stamps[path] = stamp
+                if unreadable.contains(path) { continue }         // not a playable video: not offered
+                guard let info = media[path] else { loadInfo(path); complete = false; continue }
+                files.append(InventoryFile(name: name, size: stamp.0, modified: stamp.1, duration: info.duration,
+                                           fps: info.fps, hasAudio: info.hasAudio))
+            }
+            if !files.isEmpty { folders[folder] = files }
+        }
+        guard complete else { return }                           // try again when the measuring is done
+        let inv = Inventory(machine: Self.thisMac, displays: displays.count, folders: folders)
+        if inv != sentInventory {
+            sentInventory = inv
+            linkClient?.send(.inventory(inv))
+            NSLog("link: sent inventory: %d folder(s)", folders.count)
+        }
+    }
+
+    /// Player: tell the conductor what stops this Mac playing, when it changes.
+    private func sendReport() {
+        guard mode == .player, linkUp, sharedLengths != nil else { return }
+        let blocking = fileProblems()
+        guard blocking != sentReport else { return }
+        sentReport = blocking
+        linkClient?.send(.report(machine: Self.thisMac, blocking: blocking))
+    }
+
+    /// One line per player for setup, e.g. "Mac B: 3 displays, ready".
+    var playerLines: [String] {
+        players.values.map { p in
+            let name = p.machine ?? "a player"
+            if let b = p.build, b != Self.build { return "\(name): runs build \(b), this Mac runs \(Self.build)" }
+            guard let inv = p.inventory else { return "\(name): listing its files…" }
+            let state = p.blocking.map { $0.isEmpty ? "ready" : "\($0.count) problem(s)" } ?? "checking its files…"
+            return "\(name): \(inv.displays) display\(inv.displays == 1 ? "" : "s"), \(state)"
+        }.sorted()
+    }
+
     private func updateClockStatus() {
         statusTicks += 1
         server?.broadcast()          // the once-a-second repeat of the show state
+        if statusTicks % 5 == 0 { refreshInventory(); sendReport() }    // [claude] P3b, player only
         if let server {
             let players = server.players()
             clockStatus = "Conductor: answering clock requests on \(server.addresses.joined(separator: ", "))"
@@ -450,7 +838,10 @@ final class AppModel: ObservableObject {
             clockStatus = Self.describe(client.status)
                 + " · conductor " + (follower.current.map { "\($0.phase)" } ?? "not heard from yet")
         } else if mode == .player {
-            clockStatus = "Player: type the conductor's address and press Return."
+            // [claude] P4b: no address = looking for one.
+            clockStatus = severalConductors.isEmpty
+                ? "Player: looking for a conductor on this network… (or type its address and press Return)"
+                : "Player: several conductors found (\(severalConductors.joined(separator: ", "))). Type the address of the one to follow."
         } else if clockStatus.hasPrefix("Clock:") == false {
             clockStatus = ""
         }
@@ -579,6 +970,13 @@ final class AppModel: ObservableObject {
                 unreadable.insert(path)
             }
             infoLoads[path] = nil
+            // [claude] P3b: a measured file can change a work's length (the
+            // conductor re-shares) or complete a player's inventory.
+            switch mode {
+            case .conductor: scheduleShare()
+            case .player: if infoLoads.isEmpty { refreshInventory(); sendReport() }
+            case .standalone: break
+            }
         }
     }
 
@@ -618,6 +1016,13 @@ final class AppModel: ObservableObject {
     /// one with the missing file.
     var problems: (blocking: [String], warnings: [String]) {
         var blocking: [String] = [], warnings: [String] = []
+        // [claude] P3b: a player plays the conductor's playlist, not its own.
+        if mode == .player, mediaFolder.isEmpty {
+            return (["Choose this Mac's media folder: the conductor builds the playlist from what each Mac has."], [])
+        }
+        if mode == .player, sharedLengths == nil {
+            return ([linkUp ? "Waiting for the conductor's playlist…" : "Not connected to the conductor yet."], [])
+        }
         if machineIndex == nil {
             let names = show.machines.map(\.name).joined(separator: ", ")
             return (["This show has parts for \(names), but not for this Mac (\(Self.thisMac))."], [])
@@ -626,17 +1031,10 @@ final class AppModel: ObservableObject {
         // [claude] Copying gigabytes while playing would compete with the
         // players for the disk; a collect is short and run by a person.
         if collecting != nil { blocking.append("Wait for the collect to finish.") }
+        blocking += fileProblems()
         for (w, work) in show.works.enumerated() {
-            let active = Array(panels(of: w).prefix(displays.count).enumerated())
-            for (i, p) in active {
-                guard let file = p.file else { continue }
-                let f = resolve(file)
-                if !fileExists(f) { blocking.append("\(work.name), display \(i + 1): file not found (\(f)).") }
-                else if unreadable.contains(f) { blocking.append("\(work.name), display \(i + 1): can't read this file as video.") }
-                else if media[f] == nil { blocking.append("\(work.name), display \(i + 1): still reading the file…") }
-            }
             if let extra = leftOver[work.name] {
-                warnings.append("\(work.name): \(extra.count) more file(s) than displays, not used: \(extra.joined(separator: ", ")).")
+                warnings.append("\(work.name): \(extra.count) file(s) not used on this Mac (more files than displays, or numbered for another screen): \(extra.joined(separator: ", ")).")
             }
             if panels(of: w).count > displays.count, panels(of: w).dropFirst(displays.count).contains(where: { $0.file != nil }) {
                 warnings.append("\(work.name) has files for \(panels(of: w).count) displays but \(displays.count) are connected. The extra ones won't play.")
@@ -645,23 +1043,44 @@ final class AppModel: ObservableObject {
         if blocking.isEmpty, !show.works.indices.contains(where: { length(of: $0) > 0 }) {
             blocking.append("No work has a file for this Mac's displays.")
         }
-        // [claude] Until P3, each Mac times the works by its OWN files'
-        // lengths. The timeline is a pure function of those lengths and the
-        // shared start, so Macs whose files have the same lengths change
-        // work together; Macs whose lengths differ drift apart at the first
-        // change. This build can't compare lengths across Macs, so it WARNS
-        // with the condition instead of blocking (Mat, 0.3.1: same file on
-        // every Mac, Play was blocked for no reason). P3 sends the
-        // conductor's lengths to all and the condition goes. A single work
-        // that loops until stopped has no change to time, so no warning.
-        if mode != .standalone, !isSingleLoopingWork {
-            warnings.append("Across Macs (until the next stage): every Mac must have every work, with files of the same lengths, or the Macs drift apart at the first change. → and ← are off.")
+        // [claude] P3b, the conductor's file check (§ Media on several
+        // Macs): every connected player must have listed its files and
+        // found nothing missing, on the same build. A Mac in the show that
+        // isn't connected only warns: its screens stay black, and a show may
+        // reasonably run with a Mac switched off.
+        if mode == .conductor {
+            for p in players.values {
+                let name = p.machine ?? "A player"
+                if let b = p.build, b != Self.build {
+                    blocking.append("\(name) runs tableauX \(b); this Mac runs \(Self.build). Use the same build on every Mac.")
+                } else if p.inventory == nil || p.blocking == nil {
+                    blocking.append("Waiting for \(name) to check its files…")
+                } else {
+                    blocking += p.blocking!.map { "\(name): \($0)" }
+                }
+            }
+            let connected = Set(players.values.compactMap(\.machine))
+            for m in show.machines where m.name != machineName && !connected.contains(m.name) {
+                warnings.append("\(m.name) isn't connected: its screens will stay black.")
+            }
         }
         return (blocking, warnings)
     }
 
-    private var isSingleLoopingWork: Bool {
-        show.works.count == 1 && show.works[0].repeat == .untilNext && show.works[0].shorter == .loop
+    /// This Mac's own files that stop it playing: missing, unreadable, or
+    /// not measured yet. A player sends exactly these to the conductor.
+    private func fileProblems() -> [String] {
+        var out: [String] = []
+        for (w, work) in show.works.enumerated() {
+            for (i, p) in panels(of: w).prefix(displays.count).enumerated() {
+                guard let file = p.file else { continue }
+                let f = resolve(file)
+                if !fileExists(f) { out.append("\(work.name), display \(i + 1): file not found (\(f)).") }
+                else if unreadable.contains(f) { out.append("\(work.name), display \(i + 1): can't read this file as video.") }
+                else if media[f] == nil { out.append("\(work.name), display \(i + 1): still reading the file…") }
+            }
+        }
+        return out
     }
 
     // MARK: Show files
@@ -772,12 +1191,12 @@ final class AppModel: ObservableObject {
         // players, standalone it goes nowhere (server is nil).
         let report: ((ShowState) -> Void)? = s != nil ? nil : { [weak self] state in self?.server?.publish(state) }
         let pb = Playback(screens: ordered, works: parts, playlist: show.playlist, sync: show.sync, clock: clock,
-                          allowSkip: mode == .standalone, onStateChange: report,
+                          allowSkip: true, onStateChange: report,     // [claude] P3a: players follow → / ← via the state's work index
                           onWindowsUp: { [weak self] in self?.setupWindows.forEach { $0.orderOut(nil) } },
                           onEnd: { [weak self] in self?.playbackEnded() })
         playback = pb
         isPlaying = true
-        pb.start(following: s?.start)
+        pb.start(following: s.map { ($0.index, $0.start) })
     }
 
     func stop() { playback?.stop() }

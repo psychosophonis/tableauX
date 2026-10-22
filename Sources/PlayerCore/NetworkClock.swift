@@ -181,31 +181,42 @@ public struct SteadinessMeter {
 public struct ShowState: Equatable, Sendable {   // Sendable: plain values, safe to hand between threads
     public enum Phase: UInt64, Sendable { case stopped = 0, playing = 1, paused = 2 }
 
-    public static let size = 40
-    /// "TBXSTATE" in ASCII: a datagram that happens to be 40 bytes but isn't
-    /// ours is refused instead of being read as a show starting.
+    /// [claude] 48 bytes since v4 P3 (the work index was added). A 40-byte
+    /// state from a 0.3.2 or older conductor is refused by its size: a player
+    /// that read it would not know which work is on. Every Mac in a show runs
+    /// the same build.
+    public static let size = 48
+    /// "TBXSTATE" in ASCII: a datagram that happens to be the right size but
+    /// isn't ours is refused instead of being read as a show starting.
     static let magic: UInt64 = 0x4554_4154_5358_4254
 
     public var version: UInt64     // conductor host ns when the state changed; only grows
     public var phase: Phase
-    public var start: Double       // v1's h0, in show time
+    public var start: Double       // show time at which work `index` starts (v1's h0)
     public var pausedAt: Double    // show time; meaningful when paused
+    /// [claude] The timeline's anchor work (§ v4 › Timing): "work `index`
+    /// starts at `start`". Automatic changes need no message (every Mac
+    /// computes them from the anchor); → / ← move the anchor, and this is how
+    /// the players hear of it.
+    public var index: Int
 
-    public init(version: UInt64, phase: Phase, start: Double = 0, pausedAt: Double = 0) {
-        self.version = version; self.phase = phase; self.start = start; self.pausedAt = pausedAt
+    public init(version: UInt64, phase: Phase, start: Double = 0, pausedAt: Double = 0, index: Int = 0) {
+        self.version = version; self.phase = phase; self.start = start; self.pausedAt = pausedAt; self.index = index
     }
 
     public var bytes: [UInt8] {
         let words = [Self.magic, version, phase.rawValue,
-                     UInt64(max(start, 0) * 1e9), UInt64(max(pausedAt, 0) * 1e9)]
+                     UInt64(max(start, 0) * 1e9), UInt64(max(pausedAt, 0) * 1e9), UInt64(max(index, 0))]
         return words.flatMap { v in (0..<8).map { UInt8(truncatingIfNeeded: v.littleEndian >> ($0 * 8)) } }
     }
 
     public init?(bytes: [UInt8]) {
         guard bytes.count == Self.size else { return nil }
         func word(_ i: Int) -> UInt64 { (0..<8).reduce(0) { $0 | UInt64(bytes[i * 8 + $1]) << ($1 * 8) } }
-        guard word(0) == Self.magic, let phase = Phase(rawValue: word(2)) else { return nil }
-        self.init(version: word(1), phase: phase, start: Double(word(3)) / 1e9, pausedAt: Double(word(4)) / 1e9)
+        // A work index beyond any real playlist is corruption, not a show.
+        guard word(0) == Self.magic, let phase = Phase(rawValue: word(2)), word(5) < 1_000_000 else { return nil }
+        self.init(version: word(1), phase: phase, start: Double(word(3)) / 1e9, pausedAt: Double(word(4)) / 1e9,
+                  index: Int(word(5)))
     }
 }
 

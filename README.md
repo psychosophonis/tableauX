@@ -46,6 +46,48 @@ The app isn't notarised by Apple, so macOS blocks it the first time:
 If a display is connected, removed or rearranged during playback, the show
 stops and returns to setup.
 
+## A show on several Macs, with no setup on each Mac
+
+<!-- [claude] v4 P4b, from build 0.3.6. -->
+Put the app and the videos in one folder (called **tableauX** if it isn't
+the folder the app is in), one folder per work inside it, holding that
+Mac's files for the work. End each file's name with its **screen number**,
+`_1`, `_2`, `_3`…, counted across the whole tableau: a six-screen piece on
+two three-display Macs is `_1`–`_3` on the first Mac and `_4`–`_6` on the
+second. A missing number leaves that screen black. Files without a number
+go on the free screens in name order.
+
+```
+tableauX/
+  tableauX.app
+  Class show.tableaux     ← only in the conductor's folder
+  Smith/Smith_1.mp4, Smith_2.mp4
+  Jones/Jones_1.mov
+```
+
+Copy a folder like this to each Mac (Collect show… on each Mac makes one)
+and open the app. It finds its videos in the folder it is in (or a
+`tableauX` folder in the home folder, Movies or the Desktop) and works out
+its role. A folder **with** a show file runs as the **Conductor**; one
+without runs as a **Player**, finds the conductor on the network by itself,
+sends it a list of its videos, and plays its part. Arrange every Mac's
+screens from the conductor's setup window.
+
+Each Mac still asks twice the first time: **Open Anyway** (see First launch)
+and **Allow** when macOS asks about finding devices on the local network.
+If the network blocks discovery, type the conductor's address on the player
+instead.
+
+### Test show
+
+`tableauX-<version>-test.zip` (made by `scripts/make-test-show.sh`) holds
+two ready folders: **Test conductor** (with a show file) and **Test player**
+(without). Copy the first to one Mac and the second to the others, and open
+the app in each. Two works, red then blue, each a numbered count
+(`seconds.frame`, 30 frames a second) with a white block that flashes on
+every whole second: screens in step show the same number and flash
+together, and a phone photo shows any offset in frames.
+
 ## Updates
 
 Each new version is a new release on the [Releases page](../../releases).

@@ -171,11 +171,12 @@ final class NetworkClockTests: XCTestCase {
 
     func testShowStateRoundTrips() {
         for s in [ShowState(version: 9, phase: .playing, start: 773_112.5, pausedAt: 0),
-                  ShowState(version: 10, phase: .paused, start: 773_112.5, pausedAt: 773_140.25),
+                  ShowState(version: 10, phase: .paused, start: 773_112.5, pausedAt: 773_140.25, index: 2),
                   ShowState(version: 11, phase: .stopped)] {
             let back = ShowState(bytes: s.bytes)
-            XCTAssertEqual(s.bytes.count, 40)
+            XCTAssertEqual(s.bytes.count, 48)
             XCTAssertEqual(back?.phase, s.phase)
+            XCTAssertEqual(back?.index, s.index)
             XCTAssertEqual(back?.version, s.version)
             XCTAssertEqual(try XCTUnwrap(back?.start), s.start, accuracy: 1e-9)       // ns precision
             XCTAssertEqual(try XCTUnwrap(back?.pausedAt), s.pausedAt, accuracy: 1e-9)
@@ -186,10 +187,21 @@ final class NetworkClockTests: XCTestCase {
     /// bytes without the magic word, or with an unknown phase, aren't ours.
     func testOnlyRealStatesAreRead() {
         XCTAssertNil(ShowState(bytes: ClockPacket(seq: 1, t1: 2).bytes))
-        XCTAssertNil(ShowState(bytes: [UInt8](repeating: 0, count: 40)))
+        XCTAssertNil(ShowState(bytes: [UInt8](repeating: 0, count: ShowState.size)))
         var bad = ShowState(version: 1, phase: .playing).bytes
         bad[16] = 7                                                              // phase word = 7
         XCTAssertNil(ShowState(bytes: bad))
+    }
+
+    /// [claude] v4 P3: the state names the anchor work, and a 40-byte state
+    /// from an older build (no work index) is refused, not misread.
+    func testStateCarriesTheWorkAndOldStatesAreRefused() {
+        let s = ShowState(version: 5, phase: .playing, start: 1000, index: 3)
+        XCTAssertEqual(ShowState(bytes: s.bytes)?.index, 3)
+        XCTAssertNil(ShowState(bytes: Array(s.bytes.prefix(40))))
+        var huge = s.bytes
+        huge[47] = 0xFF                                                          // index word ≈ 2^63
+        XCTAssertNil(ShowState(bytes: huge))
     }
 
     func testFollowerIgnoresAnOlderStateThatArrivesLate() {

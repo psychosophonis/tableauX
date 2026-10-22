@@ -37,8 +37,17 @@ public enum Collect {
     /// `resolve` turns a panel's path (relative to the media folder, or full)
     /// into a full path, the way the app does. `takenFolders` (lowercased)
     /// are names already in the destination, which a work folder must avoid.
+    ///
+    /// [claude] SCREEN NUMBERS ROUND-TRIP (Mat, 2026-10-22): if importing the
+    /// copies by the folder-scan rule wouldn't put them back on the same
+    /// screens (a hand-set order, a black screen between two files), every
+    /// file of that work is named for its screen, "_N" across the tableau
+    /// (`firstScreen` = this Mac's display 1): a name already ending in its
+    /// own "_N" is kept, others get "_N" added ("intro.mov" on screen 2 →
+    /// "intro_2.mov"). When the scan would already restore them, names are
+    /// left exactly as they were.
     public static func plan(works: [Work], machine: String, resolve: (String) -> String,
-                            takenFolders: Set<String> = []) -> Plan {
+                            takenFolders: Set<String> = [], firstScreen: Int = 1) -> Plan {
         var copies: [Copy] = []
         var out = works
         var folders = takenFolders
@@ -50,20 +59,40 @@ public enum Collect {
             // map remembers which name each source was given.
             var given: [String: String] = [:]
             var names: Set<String> = []
+            var order: [String] = []                              // sources, first use first
+            for p in panels {
+                guard let file = p.file else { continue }
+                let source = resolve(file)
+                guard given[source] == nil else { continue }
+                let name = uniqueName((source as NSString).lastPathComponent, taken: names)
+                names.insert(name.lowercased())
+                given[source] = name
+                order.append(source)
+            }
+            // Would a scan of these names rebuild the same screens?
+            let intended = panels.map { $0.file.map { given[resolve($0)]! } }
+            let scanned = FolderScan.assign(folder: "", files: Array(given.values), displays: panels.count,
+                                            firstScreen: firstScreen).panels.map { $0.file.map { String($0.dropFirst()) } }
+            if scanned != intended {
+                var numbered: Set<String> = []
+                for (i, p) in panels.enumerated() {
+                    guard let file = p.file else { continue }
+                    let source = resolve(file), n = firstScreen + i
+                    let name = given[source]!
+                    guard !numbered.contains(source) else { continue }     // its first screen names it
+                    numbered.insert(source)
+                    if FolderScan.screenNumber(name) != n {
+                        let ext = (name as NSString).pathExtension
+                        let base = (name as NSString).deletingPathExtension
+                        given[source] = ext.isEmpty ? "\(base)_\(n)" : "\(base)_\(n).\(ext)"
+                    }
+                }
+            }
+            for source in order { copies.append(Copy(source: source, dest: "\(folder)/\(given[source]!)")) }
             var rewritten = panels
             for (i, p) in panels.enumerated() {
                 guard let file = p.file else { continue }       // black stays black
-                let source = resolve(file)
-                let name: String
-                if let known = given[source] {
-                    name = known
-                } else {
-                    name = uniqueName((source as NSString).lastPathComponent, taken: names)
-                    names.insert(name.lowercased())
-                    given[source] = name
-                    copies.append(Copy(source: source, dest: "\(folder)/\(name)"))
-                }
-                rewritten[i].file = "\(folder)/\(name)"
+                rewritten[i].file = "\(folder)/\(given[resolve(file)]!)"
             }
             out[w].screens[machine] = rewritten
         }
@@ -118,7 +147,7 @@ public enum FolderImport {
     /// `rootFiles` is the root's listing; `subfolders` maps each subfolder's
     /// name to its listing.
     public static func works(root: String, rootFiles: [String], subfolders: [String: [String]],
-                             machine: String, displays: Int, existing: Set<String>) -> Result {
+                             machine: String, displays: Int, existing: Set<String>, firstScreen: Int = 1) -> Result {
         var result = Result(works: [], skipped: [], leftOver: [:])
         var taken = existing
         let sorted = subfolders.keys.filter { !$0.hasPrefix(".") }
@@ -129,7 +158,7 @@ public enum FolderImport {
             guard !taken.contains(name) else { result.skipped.append(name); continue }
             taken.insert(name)
             // `folder` is the full path, so the panels hold full paths.
-            let (panels, left) = FolderScan.assign(folder: path, files: files, displays: displays)
+            let (panels, left) = FolderScan.assign(folder: path, files: files, displays: displays, firstScreen: firstScreen)
             result.works.append(Work(name: name, screens: [machine: panels]))
             if !left.isEmpty { result.leftOver[name] = left }
         }

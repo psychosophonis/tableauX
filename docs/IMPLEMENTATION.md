@@ -104,6 +104,11 @@ Risk order: the stages that could kill the idea come first.
 | P2 | One-Mac playlist playback: gap, auto-advance, →/← | a class playlist plays on one Mac | **built 2026-10-21**: 3-work test playlist ran a full cycle on this Mac's 2 displays, checked by screenshots; →/← and Esc not yet pressed (need a person); see below |
 | P2b | Collect show / work for archiving; Import folder (linked in place) | Mat's request, 2026-10-21 | **built 2026-10-21** `[claude]`: `Collect.swift` in PlayerCore (12 tests incl. a collect → import round trip); setup buttons. Not yet run through the dialogs (they need a person) |
 | P2c | New displays take a work's left-over files (Mat's 0.3.0 report) | display added after a scan gets the next file | **built 2026-10-21** `[claude]`: `FolderScan.fill` (4 tests), run on display change, open and Scan |
+| P3a | State carries the work index: → / ← on the conductor, players follow | T17 | **built 2026-10-22** `[claude]` (build 0.3.3): ShowState 48 bytes (1 new test); not yet run across Macs |
+| P3b | TCP link: inventories → conductor's playlist + lengths → players; file check | T16, T17 | **built 2026-10-22** `[claude]` (build 0.3.4): 10 new tests; loopback checks both ways (see notes); not yet run across Macs |
+| P4a | Conductor sets every Mac's screens from their reported files | Mat: "work entirely on the conductor" | **built 2026-10-22** `[claude]` (build 0.3.5); loopback screenshot found and fixed a bug (one-machine show lost the conductor's part when a player joined; 2 new tests) |
+| P4b | Zero setup: `tableauX` folder (beside the app first), role from the folder, Bonjour discovery | Mat: send the app + a folder and it "just works" | **built 2026-10-22** `[claude]` (build 0.3.6): 6 new tests; run on this Mac (see notes); Bonjour on the uni network and translocation on a fresh Mac untested |
+| P4c | Test show packaged with the app (Mat: "for me, and for testing") | `scripts/make-test-show.sh` | **built 2026-10-22** `[claude]`: `dist/tableauX-0.3.6-test.zip` (10 MB): "Test conductor" + "Test player" folders; 2 works (red 12 s, blue 8 s) × 3 screens, count = seconds.frame, white flash each second. Conductor kit opened on this Mac: role and show from its folder, Play enabled |
 | P3 | Network: TCP channel; inventories → merged playlist → players; state with work index; file check | T16, T17 | |
 | P4 | Setup: playlist editor, folder import, per-work settings | a class set up in minutes | |
 | P5 | Two-Mac playlist run; 8 h soak on the Mac mini (T18) | release 0.3 | |
@@ -252,8 +257,52 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   playlist of identical-length files plays across Macs. Not published.
   Mat 2026-10-22: "all working", a short ProRes test video across 5
   screens on 2 Macs, playlist with work changes (by eye; no log or
-  photo recorded). Which 2 of the 3 Macs, and whether the Intel one was
-  among them, not recorded.
+  photo recorded). One of the 2 Macs was a late-model Intel Mac: the first
+  run of tableauX on Intel. Logs to follow; no long video tested yet.
+  Long sync clips made for the next run: `testmedia/long/` (5 × 600 s 1080p
+  sweep, `scripts/make-test-media.sh testmedia/long 1920 1080 600 5`).
+- 0.3.3 (2026-10-22): P3a, → / ← across Macs. States are 48 bytes, so it
+  doesn't mix with 0.3.2 or older. Not published.
+- 0.3.4 (2026-10-22): P3b, one playlist from the conductor. Not published.
+  Loopback checks on this Mac, the app against a script standing in for
+  the other Mac:
+  - app as Conductor, fake player: player added as a machine after the
+    conductor, its folder became a work with files in name order, length =
+    its longest file (40 s);
+  - app as Player, fake conductor started 3 s later: the player connected
+    on a retry, sent hello and an inventory with measured lengths (6, 3,
+    4, 4, 5 s, matching the files), took the 4-work playlist, and reported
+    the one missing file.
+  Not checked: two real Macs; Play driven by a shared playlist (needs the
+  run); a 0.3.3 Mac mixed in (should show a build warning only once both
+  run 0.3.4, since 0.3.3 has no link).
+  The 8 h P0 probe was running during these builds and runs (09:22–).
+- 0.3.5 (2026-10-22): + P4a, any Mac's screens set from the conductor, and
+  the one-machine-show adoption fix. Not published. Loopback (app as
+  conductor, fake player): picker shows the player; the player's reported
+  problem blocks Play, named. Not checked: choosing a player's file in the
+  menu by hand (needs a person), two real Macs.
+- 0.3.6 (2026-10-22): + P4b zero setup. Not published. Run on this Mac: the
+  built app in a `tableauX` folder with three works and no show, settings
+  wiped, a script as conductor announced by `dns-sd -R`:
+  - opened from Finder: found its own folder, made itself a Player, but sat
+    at "looking for a conductor" for 15 s: most likely waiting for the
+    Local Network permission (an app opened from Finder needs its own);
+  - the same app run from Terminal (Terminal's permission): found its
+    folder, role Player, found "Fake Conductor" by Bonjour, connected,
+    clock on 192.168.1.46, sent its inventory, took the playlist, reported
+    the missing file; rediscovered it after it closed.
+  To check on real Macs: discovery after clicking Allow; Bonjour on the
+  uni network; translocation on a fresh Mac.
+- 0.3.7 (2026-10-22): fix from Mat's run. The app in
+  /Volumes/Espirit/testshow (works, no show file) opened the test kit's show
+  from the Desktop instead (every file "missing"; Scan merged work1–3 into
+  it). Now a found folder with no show file starts a fresh show from its
+  works. 1 new test.
+- 0.3.8 (2026-10-22): "_N" = tableau screen N (Mat). Scan, conductor merge,
+  new displays and Import honour it; Collect names copies for their screens
+  when a scan wouldn't restore them. 10 new tests (133); 3 old Collect
+  expectations changed on purpose (they now number). Offset mutant caught.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

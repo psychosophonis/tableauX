@@ -243,11 +243,13 @@ SyncMath.signedError(actual:expected:duration:) -> Double     // wrap-aware, sig
 SyncMath.correction(error:frame:) -> .none | .slew(rate:) | .resync
 ClockPacket(seq:t1:t2:t3:).bytes / ClockPacket(bytes:)          // Stage 2: the wire format
 SteadinessMeter(window: 60).add(time:offset:) / .p95Spread      // Stage 2: T11's measure, live
-ShowState(version:phase:start:pausedAt:).bytes / ShowState(bytes:) // Stage 3a
+ShowState(version:phase:start:pausedAt:index:).bytes / ShowState(bytes:) // Stage 3a; index v4 P3a (48 bytes)
 StateFollower().accept(_:now:) -> Bool                          // Stage 3a: stale states ignored
 SyncMath.scheduledStart(start:now:lead:) -> Double              // Stage 3a: start or join late
 FolderScan.videos(_:) / .assign(folder:files:displays:)         // v4 P1: natural sort, overflow (T14)
-FolderScan.fill(_:folder:files:displays:) -> (panels, leftOver)     // v4: new displays take unused files; append-only
+FolderScan.fill(_:folder:files:displays:firstScreen:) -> (panels, leftOver)  // v4: new displays take unused files; append-only
+FolderScan.screenNumber(_:) -> Int? ; .assign(…, firstScreen:)          // "_N" = tableau screen N (Mat, 2026-10-22)
+SharedShow.firstScreen(_:of:) -> Int                                    // a Mac's display 1 as a tableau screen number
 PlaylistMerge.merge(_:with:) / .length(of:in:)                  // v4 P1: works joined by folder name (T14)
 Timeline(entries:settings:).position(at:anchor:start:)          // v4 P1: pure timeline (T15)
 Timeline.screenPosition(elapsed:workLength:fileDuration:shorter:)
@@ -258,6 +260,12 @@ ShowFile.decode: version 3; version 2 → one work (§ v4 › Model)          //
 Collect.plan(works:machine:resolve:takenFolders:) -> Plan {copies, works}  // v4: § Collecting and importing
 Collect.uniqueName(_:taken:) / .folderName(_:)                          // case-insensitive clash → "name 2.ext"
 FolderImport.works(root:rootFiles:subfolders:machine:displays:existing:) -> Result {works, skipped, leftOver}
+FolderScan.folder(of:work:) -> String?                                  // a work's one folder, or nil if set by hand
+LinkMessage .hello / .inventory / .report / .show (Codable)              // v4 P3b link messages
+LinkFraming.frame(_:) / Reader().feed(_:) throws -> [LinkMessage]       // 4-byte length + JSON, max 16 MB
+SharedShow.merge(_:with:conductor:) / .lengths(_:own:inventories:)      // conductor folds a player in; adopts a one-machine show
+ShowFolder.pick(chosen:appFolder:home:listing:) -> String?              // v4 P4b: which folder is the media folder
+ShowFolder.isShowFolder(files:subfolders:) / .shows(in:) / .showToOpen(last:folder:folderShows:)
 ```
 
 ### Show state (Stage 3a) [claude, 2026-10-21; Mat asked for 3a, details to confirm]
@@ -273,6 +281,13 @@ FolderImport.works(root:rootFiles:subfolders:machine:displays:existing:) -> Resu
   ASCII), version, phase (0 stopped, 1 playing, 2 paused), start ns,
   pausedAt ns. The clock packet stays 32 bytes, so the size tells them apart
   and the probe still works.
+- [claude] **v4 P3a:** 48 bytes, a sixth word `index`: the timeline's anchor
+  work, so `start` reads "work `index` starts at `start`" (§ v4 › Timing).
+  A 40-byte state from an older build is refused: every Mac in a show must
+  run the same build. A player follows a new anchor while playing (→ / ←
+  on the conductor) by going black and loading that work for after the gap;
+  a new start after a pause is a resume, shifted as before. The conductor
+  can't skip while paused, so the two can't be confused.
 - `version` is the conductor's host time of the change (it only grows). A
   player ignores a state older than the last one it accepted (UDP can
   reorder), unless it has accepted nothing for 5 s, which means the conductor
@@ -385,6 +400,15 @@ release 0.3 (Mat: "move to three"). Builds on v3. -->
   sorted by name, numbers compared as numbers (2 before 10), and assigned to
   that Mac's displays 1, 2, 3, … More files than the Mac has displays: the
   first ones are used and the work shows a warning listing those left out.
+- **Files can name their screen: "_N" (Mat, 2026-10-22).** A video whose
+  name ends `_<digits>` before the extension (`Comp 4_5.mov`) goes on
+  screen N, **counted across the tableau** in the show's machine order (a
+  6-screen work on two 3-display Macs: `_1`–`_3` on the first, `_4`–`_6`
+  on the second). [claude] Details: a number for a screen not on this Mac,
+  or a second file with the same number, is left over (warned); unnumbered
+  files fill the displays still empty, in name order, so a folder with no
+  numbers works as before; a missing number leaves that screen black.
+  Applies to Scan, the conductor's merge, new displays, and Import.
 - **The folder name joins a work across Macs (Mat):** `Smith` with 2 files on
   the conductor and 3 on a player is one work of 5 screens: conductor
   displays 1–2, player displays 1–3. A Mac with no folder of that name shows
@@ -404,6 +428,43 @@ release 0.3 (Mat: "move to three"). Builds on v3. -->
   stay unset, so a file added later fills them at the next scan. A work
   whose files on this Mac come from several folders was set by hand and is
   left alone.
+
+### Zero setup (Mat, 2026-10-22)
+Aim (Mat): "minimise any step that requires going back to a client… send a
+copy of tableauX and a folder to the client and have it, as much as
+possible, just work."
+- **The folder is called `tableauX` (Mat).** The media folder, first match:
+  a folder chosen with Choose… (saved; a deliberate choice wins); **the
+  folder the app is in (Mat)**, if it holds a show file or a folder of
+  videos; then `~/tableauX`, `~/Movies/tableauX`, `~/Desktop/tableauX`
+  [claude: home and Movies first, as macOS asks before an app reads the
+  Desktop]. A folder found by looking is looked for again at each launch.
+- [claude] App Translocation: a quarantined app opened where it was
+  unzipped runs from a hidden copy; the original path comes from
+  Security.framework's SecTranslocateCreateOriginalPathForURL, looked up at
+  run time. If that fails, the app's folder is skipped.
+- **The folder decides the role (Mat):** a show file in it = Conductor;
+  works but no show = Player; no folder = Standalone. A role chosen in
+  setup overrides it from then on; a role saved by an earlier build counts
+  as chosen.
+- [claude] The show opened at launch: the last one if it is in the media
+  folder, else the newest show file there. Failing both, the last show from
+  elsewhere only if the folder was chosen by hand (or none was found);
+  otherwise a fresh show. (0.3.6 reopened the last show against a folder it
+  had merely found, pairing it with the wrong files: Mat's run, 0.3.7 fix.)
+  A conductor or standalone show with no works scans the folder.
+- [claude] **Discovery:** the conductor announces `_tableaux._tcp` (Bonjour)
+  under its computer name. A player with no typed address looks for it,
+  joins if exactly one answers (several: lists them and asks for an
+  address), and points its clock at that conductor's IPv4 address. A typed
+  address wins. Info.plist declares the service (NSBonjourServices).
+- Left for a person on each Mac, once: Gatekeeper's Open Anyway (removed
+  only by notarisation, Mat's call) and the Local Network Allow (always
+  asked; discovery waits for it).
+- **Untested assumptions, with their cheapest tests:** Bonjour on the
+  university network (`dns-sd -R test _tableaux._tcp local 47801` on one
+  Mac, `dns-sd -B _tableaux._tcp` on another); translocation resolved on a
+  fresh Mac (download a zip of the folder, unzip, open, Open Anyway).
 
 ### Collecting and importing (Mat, 2026-10-21)
 - **Files stay where they are (Mat):** in the media folder, or linked by
@@ -430,9 +491,12 @@ release 0.3 (Mat: "move to three"). Builds on v3. -->
   already at the destination gets " 2". Missing files are skipped and
   listed; free space is checked before copying; Play is blocked while a
   collect runs.
-- [claude] **Limit:** a collected work keeps its file names, so importing
-  it assigns screens in name order. An order set by hand, or a black screen
-  between files, survives only through the collected show file.
+- [claude] **Screens round-trip (since "_N", 2026-10-22):** a collected
+  work keeps its file names when a scan of them would restore its screens;
+  otherwise each file is named for its screen ("intro.mov" on screen 2 →
+  "intro_2.mov"; a name already ending in its own number is kept), so
+  importing the archive restores an order set by hand and black screens
+  between files. (Before this, they survived only in the show file.)
 
 ### Playing (Mat: auto-advance with manual override; black gap)
 - Each work has a **repeat**: once, N times, or until moved on (a single
@@ -476,6 +540,43 @@ release 0.3 (Mat: "move to three"). Builds on v3. -->
   and lists anything missing, per Mac.
 - A Mac that joins or rescans later sends a new inventory; the conductor
   updates the playlist and resends it.
+- [claude] **As built (P3b, 2026-10-22), for Mat to confirm:**
+  - TCP port 47801 on the conductor (the clock is UDP 47800). Each message
+    is a 4-byte big-endian length then JSON; over 16 MB is refused and the
+    connection closed; a frame that doesn't decode is skipped.
+  - Messages: player → `hello {machine, build}`, `inventory`, `report
+    {machine, blocking}`; conductor → `show {show, lengths}`.
+  - A player reconnects every 2 s while the link is down, and on each
+    connection sends everything again. It rescans every 5 s and resends
+    its inventory if a name, size or date changed: that is the "still has
+    what it reported" check, done by the player rather than on request.
+  - The conductor adds a player's machine the first time it hears from it,
+    at the end of the list (the screen numbering), and saves it with the
+    show. Its folders fold in by PlaylistMerge, then new displays take
+    left-over files.
+  - A player plays the conductor's playlist, not its own show file; its
+    setup shows it read-only. Its Scan sends a fresh inventory.
+  - A one-machine show saved under another Mac's name is ADOPTED by the
+    conductor when the first player joins (its lone machine and screens
+    are renamed to the conductor), unless that machine is the joining
+    player's. Without this the conductor lost its own part the moment a
+    player joined (found in the P4a loopback run).
+  - **P4a, Manual (Mat, 2026-10-22: "work entirely on the conductor once
+    the clients have reported"):** the conductor's setup has "Screens on:
+    This Mac | each other Mac". Another Mac's displays each get a file menu
+    of everything it reported (any folder), audio and Fit/Fill; edits reach
+    it with the next playlist. Each Mac's last inventory is kept when it
+    disconnects, so its files stay choosable and the work lengths don't
+    change under the others.
+  - **For Mat to decide:** a work's name is also its folder name, which
+    joins it across Macs and across rescans. Renaming a work on the
+    conductor breaks that: the next inventory with the old folder name adds
+    it again as a new work. Fixing it needs a display name separate from
+    the folder name in the show file.
+  - Play on the conductor is blocked by a player's missing or unreadable
+    files, by a player that hasn't checked its files yet, and by a player
+    on another build. A Mac in the show that isn't connected is a warning:
+    its screens stay black.
 
 ### Model
 ```
@@ -515,11 +616,12 @@ for Mat to confirm or change. -->
   the app hides a screen whose item ends before its work.
 - **[claude] → / ←:** black at once, the chosen work after the gap. In a gap,
   "current" is the work about to start.
-- **[claude] P2 limit:** until P3 sends one set of lengths to every Mac,
+- **[claude] P2 limit (lifted by P3b, 0.3.4):** until P3 sends one set of lengths to every Mac,
   each Mac times works by its own files, so a playlist across Macs keeps
   in step only if every Mac has every work with files of the same lengths.
   Setup warns of this (0.3.2; 0.3.0–0.3.1 blocked it, which stopped Mat
-  playing identical files on three Macs). → / ← are off across Macs.
+  playing identical files on three Macs). → / ← work across Macs from
+  P3a (0.3.3), carried by the state's work index.
 
 ### Targets
 | # | Target | How it is checked |
@@ -561,7 +663,8 @@ swift build && swift test
 Tests: `DisplayOrderTests`, `PlacementTests`, `SyncMathTests`, `ShowFileTests`,
 `NetworkClockTests`, `ClockReplayTests` (the real Wi-Fi recording),
 `FolderScanTests`, `PlaylistMergeTests`, `TimelineTests`, `ItemLayoutTests`,
-`CollectTests`, `FolderImportTests` (v4).
+`CollectTests`, `FolderImportTests`, `FillTests`, `LinkFramingTests`,
+`SharedShowTests`, `ShowFolderTests`, `ScreenNumberTests` (v4).
 Probes: also `proofs/clock-probe.swift` (T10, T11), `proofs/work-switch-probe.swift` (v4 riskiest assumption).
 Probes: `proofs/sync-probe.swift` (T1, T2, T4 on this machine).
 Lab checklist (T4 on the Mac mini, T6): `docs/LAB-TEST.md`.

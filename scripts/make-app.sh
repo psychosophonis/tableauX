@@ -47,6 +47,10 @@ cat > "${app}/Contents/Info.plist" <<EOF
        local network; this is the reason the prompt shows. -->
   <key>NSLocalNetworkUsageDescription</key>
   <string>tableauX keeps its clock in step with the other Macs playing the same show.</string>
+  <!-- [claude] v4 P4b: players find the conductor by Bonjour. macOS only lets
+       an app look for the service types it declares here. -->
+  <key>NSBonjourServices</key>
+  <array><string>_tableaux._tcp</string></array>
 </dict>
 </plist>
 EOF

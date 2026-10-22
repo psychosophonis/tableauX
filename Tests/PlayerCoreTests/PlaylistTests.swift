@@ -27,6 +27,60 @@ final class FolderScanTests: XCTestCase {
     }
 }
 
+/// [claude] Files that name their screen, "_N" across the tableau (Mat, 2026-10-22).
+final class ScreenNumberTests: XCTestCase {
+    func testOnlyAnUnderscoreNumberAtTheEndCounts() {
+        XCTAssertEqual(FolderScan.screenNumber("Comp 4_5.mov"), 5)
+        XCTAssertEqual(FolderScan.screenNumber("Smith final_12.mp4"), 12)
+        XCTAssertNil(FolderScan.screenNumber("10.mp4"))
+        XCTAssertNil(FolderScan.screenNumber("draft_v2.mov"))
+        XCTAssertNil(FolderScan.screenNumber("x_0.mov"))
+        XCTAssertNil(FolderScan.screenNumber("x_.mov"))
+    }
+
+    /// Mat's files: numbered in screen order already, so the same result.
+    func testMatsCompFilesLandInOrder() {
+        let (panels, left) = FolderScan.assign(folder: "work1", files: ["Comp 4_3.mov", "Comp 4_1.mov", "Comp 4_2.mov"], displays: 2)
+        XCTAssertEqual(panels.map(\.file), ["work1/Comp 4_1.mov", "work1/Comp 4_2.mov"])
+        XCTAssertEqual(left, ["Comp 4_3.mov"])
+    }
+
+    func testTheNumberDecidesNotTheNameAndAGapStaysBlack() {
+        let (panels, _) = FolderScan.assign(folder: "W", files: ["final_3.mov", "draft_1.mov"], displays: 3)
+        XCTAssertEqual(panels.map(\.file), ["W/draft_1.mov", nil, "W/final_3.mov"])
+    }
+
+    /// The second Mac of a 3+3 tableau: its screens are 4–6. A file numbered
+    /// for the first Mac is left over ("not on this Mac").
+    func testASecondMacTakesItsOwnNumbers() {
+        let (panels, left) = FolderScan.assign(folder: "W", files: ["p_5.mov", "p_4.mov", "p_2.mov"], displays: 3, firstScreen: 4)
+        XCTAssertEqual(panels.map(\.file), ["W/p_4.mov", "W/p_5.mov", nil])
+        XCTAssertEqual(left, ["p_2.mov"])
+    }
+
+    func testUnnumberedFilesFillTheGapsAndDuplicatesAreLeftOver() {
+        let (panels, left) = FolderScan.assign(folder: "W", files: ["a_2.mov", "b_2.mov", "loose.mov"], displays: 2)
+        XCTAssertEqual(panels.map(\.file), ["W/loose.mov", "W/a_2.mov"])
+        XCTAssertEqual(left, ["b_2.mov"])
+    }
+
+    func testANewDisplayTakesTheFileNumberedForIt() {
+        let (panels, _) = FolderScan.fill([PanelConfig(file: "W/s_1.mov")], folder: "W",
+                                          files: ["s_1.mov", "s_3.mov"], displays: 3)
+        XCTAssertEqual(panels.map(\.file), ["W/s_1.mov", nil, "W/s_3.mov"])     // the gap is stored: s_3 is screen 3
+    }
+
+    func testTheConductorPlacesAPlayersNumbersAfterItsOwnScreens() {
+        let s = Show(machines: [Machine(name: "A", displays: 3)])
+        XCTAssertEqual(SharedShow.firstScreen(s, of: "A"), 1)
+        let inv = Inventory(machine: "B", displays: 3,
+                            folders: ["W": ["W_4.mov", "W_6.mov", "W_5.mov"].map { InventoryFile(name: $0, duration: 5) }])
+        let m = SharedShow.merge(s, with: inv, conductor: "A")
+        XCTAssertEqual(SharedShow.firstScreen(m, of: "B"), 4)
+        XCTAssertEqual(m.works[0].screens["B"]?.map(\.file), ["W/W_4.mov", "W/W_5.mov", "W/W_6.mov"])
+    }
+}
+
 /// [claude] A display added after the scan takes the left-over files.
 final class FillTests: XCTestCase {
     private let files = ["3.mp4", "1.mp4", "10.mp4", "2.mp4", "notes.txt"]
@@ -55,6 +109,14 @@ final class FillTests: XCTestCase {
         XCTAssertEqual(left, [])
         let (later, _) = FolderScan.fill(panels, folder: "/x/W", files: ["1.mp4", "2.mp4"], displays: 3)
         XCTAssertEqual(later.map(\.file), ["/x/W/1.mp4", "/x/W/2.mp4"])
+    }
+
+    func testAWorksFolderIsItsFilesOneFolderOrItsName() {
+        XCTAssertEqual(FolderScan.folder(of: [PanelConfig(file: "W/1.mp4"), PanelConfig()], work: "X"), "W")
+        XCTAssertEqual(FolderScan.folder(of: [PanelConfig(file: "/a/W/1.mp4")], work: "X"), "/a/W")
+        XCTAssertEqual(FolderScan.folder(of: [PanelConfig()], work: "X"), "X")
+        XCTAssertNil(FolderScan.folder(of: [PanelConfig(file: "A/1.mp4"), PanelConfig(file: "B/1.mp4")], work: "X"))
+        XCTAssertNil(FolderScan.folder(of: [PanelConfig(file: "1.mp4")], work: "X"))   // loose in the media folder
     }
 
     func testNoChangeWhenThePanelsCoverTheDisplays() {

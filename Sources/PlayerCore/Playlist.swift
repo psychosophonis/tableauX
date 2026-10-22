@@ -82,38 +82,95 @@ public enum FolderScan {
              .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    /// One Mac's panels for one work: its videos in order onto its displays,
-    /// audio off (Mat's default), the rest black. Files beyond the Mac's
-    /// display count are returned as `leftOver`, for setup's warning.
-    /// `folder` prefixes each file, giving a path relative to the media folder.
-    public static func assign(folder: String, files: [String], displays: Int) -> (panels: [PanelConfig], leftOver: [String]) {
-        let ordered = videos(files)
-        let used = ordered.prefix(displays)
-        var panels = used.map { PanelConfig(file: "\(folder)/\($0)", audio: false, scaling: .fit) }
-        while panels.count < displays { panels.append(PanelConfig()) }
-        return (panels, Array(ordered.dropFirst(displays)))
+    /// [claude] The screen a file names for itself (Mat, 2026-10-22): a name
+    /// ending "_<digits>" before its extension, "Comp 4_5.mov" → 5. Screens
+    /// count ACROSS THE TABLEAU (every Mac's displays, in the show's order),
+    /// so a student numbers a 6-screen piece 1 to 6 once. Only the
+    /// underscore form counts: "10.mp4" is a name, not a screen number.
+    public static func screenNumber(_ name: String) -> Int? {
+        let base = (name as NSString).deletingPathExtension
+        guard let us = base.lastIndex(of: "_") else { return nil }
+        let digits = base[base.index(after: us)...]
+        guard !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber),
+              let n = Int(digits), n >= 1 else { return nil }
+        return n
+    }
+
+    /// One Mac's panels for one work, audio off (Mat's default), the rest
+    /// black. `firstScreen` is the tableau screen number of this Mac's
+    /// display 1 (1 for the first Mac, or a Mac on its own).
+    /// - A NUMBERED file ("_N") goes on screen N if that screen is on this
+    ///   Mac; if not, or if another file already took N, it is left over.
+    /// - Unnumbered files fill the displays still empty, in name order, so a
+    ///   folder with no numbers works exactly as before numbers existed.
+    /// - A number missing in the middle leaves that screen black.
+    /// Left-over files are returned for setup's warning. `folder` prefixes
+    /// each file, giving a path relative to the media folder.
+    public static func assign(folder: String, files: [String], displays: Int, firstScreen: Int = 1) -> (panels: [PanelConfig], leftOver: [String]) {
+        var slots = [String?](repeating: nil, count: displays)
+        var unnumbered: [String] = [], left: [String] = []
+        for v in videos(files) {
+            if let n = screenNumber(v) {
+                let i = n - firstScreen
+                if slots.indices.contains(i), slots[i] == nil { slots[i] = v } else { left.append(v) }
+            } else {
+                unnumbered.append(v)
+            }
+        }
+        for v in unnumbered {
+            if let i = slots.firstIndex(where: { $0 == nil }) { slots[i] = v } else { left.append(v) }
+        }
+        let panels = slots.map { $0.map { PanelConfig(file: "\(folder)/\($0)", audio: false, scaling: .fit) } ?? PanelConfig() }
+        return (panels, videos(left))
+    }
+
+    /// [claude] Which folder a work's screens on one Mac come from, for
+    /// `fill`: the one folder all its files are in (as stored: relative to
+    /// the media folder, or a full path); with no files yet, the folder
+    /// named after the work. Files from several folders mean the screens
+    /// were set by hand: nil, leave them alone.
+    public static func folder(of panels: [PanelConfig], work: String) -> String? {
+        let parents = Set(panels.compactMap(\.file).map { ($0 as NSString).deletingLastPathComponent })
+        if parents.isEmpty { return work }
+        guard parents.count == 1, let only = parents.first, !only.isEmpty else { return nil }
+        return only
     }
 
     /// [claude] A work's panels grown to `displays`: the panels already set are
     /// kept exactly (a hand-set file, or a display left black on purpose), and
-    /// the new displays take the folder's videos that no panel uses yet, in
-    /// name order (Mat, 2026-10-21: a display plugged in after the scan should
+    /// the new displays take the folder's files that no panel uses yet: a
+    /// file numbered for that screen, else the next unnumbered file in name
+    /// order (Mat, 2026-10-21: a display plugged in after the scan should
     /// pick up the left-over files). Returns what is still unused.
     ///
     /// This is APPEND-ONLY on purpose: the rescan rule is that a person's
     /// setup is never disturbed, and the only screens nobody has set are the
-    /// ones beyond the stored panels. For the same reason it stops when the
-    /// files run out instead of padding with black: a black display that was
-    /// never stored is still "unset", so a file added to the folder later
-    /// fills it on the next scan. (Setup pads with black when it reads.)
-    public static func fill(_ panels: [PanelConfig], folder: String, files: [String], displays: Int) -> (panels: [PanelConfig], leftOver: [String]) {
+    /// ones beyond the stored panels. For the same reason trailing displays
+    /// with nothing to show aren't stored as black: a display never stored
+    /// is still "unset", so a file added to the folder later fills it on the
+    /// next scan. (Setup pads with black when it reads.) A black display
+    /// BETWEEN two filled ones is stored, as a numbered gap asks.
+    public static func fill(_ panels: [PanelConfig], folder: String, files: [String], displays: Int,
+                            firstScreen: Int = 1) -> (panels: [PanelConfig], leftOver: [String]) {
         let used = Set(panels.compactMap(\.file))
-        var unused = videos(files).filter { !used.contains("\(folder)/\($0)") }
-        var out = panels
-        while out.count < displays, !unused.isEmpty {
-            out.append(PanelConfig(file: "\(folder)/\(unused.removeFirst())"))
+        let vids = videos(files)
+        var unnumbered = vids.filter { screenNumber($0) == nil && !used.contains("\(folder)/\($0)") }
+        var added: [PanelConfig] = []
+        if panels.count < displays {
+            for i in panels.count ..< displays {
+                if let f = vids.first(where: { screenNumber($0) == firstScreen + i && !used.contains("\(folder)/\($0)") }) {
+                    added.append(PanelConfig(file: "\(folder)/\(f)"))
+                } else if !unnumbered.isEmpty {
+                    added.append(PanelConfig(file: "\(folder)/\(unnumbered.removeFirst())"))
+                } else {
+                    added.append(PanelConfig())
+                }
+            }
         }
-        return (out, unused)
+        while added.last?.file == nil, !added.isEmpty { added.removeLast() }
+        let out = panels + added
+        let placed = Set(out.compactMap(\.file))
+        return (out, vids.filter { !placed.contains("\(folder)/\($0)") })
     }
 }
 
@@ -157,7 +214,10 @@ public enum PlaylistMerge {
     ///   player that joins after the conductor scanned still fills in;
     /// - a Mac that already has screens for a work keeps them (they may have
     ///   been set by hand).
-    public static func merge(_ works: [Work], with inventories: [Inventory]) -> [Work] {
+    ///
+    /// [claude] `firstScreens`: each Mac's first tableau screen number, for
+    /// numbered files ("_N", FolderScan.assign); a Mac not listed starts at 1.
+    public static func merge(_ works: [Work], with inventories: [Inventory], firstScreens: [String: Int] = [:]) -> [Work] {
         var result = works
         let known = Set(works.map(\.name))
         let newNames = Set(inventories.flatMap { $0.folders.keys }).subtracting(known)
@@ -167,7 +227,8 @@ public enum PlaylistMerge {
             for inv in inventories where result[i].screens[inv.machine] == nil {
                 guard let files = inv.folders[result[i].name] else { continue }
                 result[i].screens[inv.machine] = FolderScan.assign(folder: result[i].name, files: files.map(\.name),
-                                                                   displays: inv.displays).panels
+                                                                   displays: inv.displays,
+                                                                   firstScreen: firstScreens[inv.machine] ?? 1).panels
             }
         }
         return result
