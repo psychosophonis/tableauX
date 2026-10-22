@@ -64,6 +64,15 @@ final class ScreenNumberTests: XCTestCase {
         XCTAssertEqual(left, ["b_2.mov"])
     }
 
+    /// Mat's run (0.3.13): works with _1–_3 need 3 displays, whatever is plugged in.
+    func testDisplaysNeededComesFromTheWorks() {
+        let mats = ["work1": ["Comp 4_1.mov", "Comp 4_2.mov", "Comp 4_3.mov"], "work2": ["Comp 5_1.mov"]]
+        XCTAssertEqual(FolderScan.displaysNeeded(mats), 3)
+        XCTAssertEqual(FolderScan.displaysNeeded(["W": ["x_4.mov", "x_6.mov"]], firstScreen: 4), 3)   // a second Mac
+        XCTAssertEqual(FolderScan.displaysNeeded(["W": ["a.mov", "b.mov"], "V": ["v_3.mov"]]), 3)      // a gap counts
+        XCTAssertEqual(FolderScan.displaysNeeded([:]), 0)
+    }
+
     func testANewDisplayTakesTheFileNumberedForIt() {
         let (panels, _) = FolderScan.fill([PanelConfig(file: "W/s_1.mov")], folder: "W",
                                           files: ["s_1.mov", "s_3.mov"], displays: 3)

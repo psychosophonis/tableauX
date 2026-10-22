@@ -124,6 +124,19 @@ public enum FolderScan {
         return (panels, videos(left))
     }
 
+    /// [claude] How many displays a Mac needs for its works (Mat, 2026-10-22:
+    /// a new show is sized by its works, not by what happens to be plugged
+    /// in). Per work folder: its highest "_N" counted from this Mac's first
+    /// screen, or its number of videos, whichever is larger; the most any
+    /// work needs. `folders`: work folder → its listing.
+    public static func displaysNeeded(_ folders: [String: [String]], firstScreen: Int = 1) -> Int {
+        folders.values.map { files in
+            let vids = videos(files)
+            let highest = vids.compactMap(screenNumber).map { $0 - firstScreen + 1 }.max() ?? 0
+            return max(highest, vids.count)
+        }.max() ?? 0
+    }
+
     /// [claude] Which folder a work's screens on one Mac come from, for
     /// `fill`: the one folder all its files are in (as stored: relative to
     /// the media folder, or a full path); with no files yet, the folder

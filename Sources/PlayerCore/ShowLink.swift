@@ -119,8 +119,12 @@ public enum SharedShow {
             s.machines[i].displays = max(s.machines[i].displays, inventory.displays)
             designed = s.machines[i].displays
         } else {
-            s.machines.append(Machine(name: inventory.machine, displays: inventory.displays))
-            designed = inventory.displays
+            // A Mac joining the show is sized by what its works need, not
+            // only by what it has plugged in (Mat, 2026-10-22).
+            let first = 1 + s.machines.reduce(0) { $0 + $1.displays }
+            let needed = FolderScan.displaysNeeded(inventory.folders.mapValues { $0.map(\.name) }, firstScreen: first)
+            designed = min(max(inventory.displays, needed), 16)
+            s.machines.append(Machine(name: inventory.machine, displays: designed))
         }
         var asDesigned = inventory
         asDesigned.displays = designed

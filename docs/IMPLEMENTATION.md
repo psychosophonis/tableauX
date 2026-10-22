@@ -336,6 +336,11 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
   connected and the 3-display test show: setup kept "Displays in this
   show: 3" with displays 2–3 "not connected here", and the preview played
   3 tiles in step. 1 new test (a report of fewer displays keeps the design).
+- 0.3.14 (2026-10-22): from Mat's run of 0.3.13 on Espirit (1 display,
+  works with _1–_3): the new all-works show still STARTED at the connected
+  count (1), leaving _2/_3 unused. Now a new show (and a player joining)
+  is sized by what its works need. Run against a link to Mat's works
+  folder with 1 display: 3 works, preview of 3 screens. 2 new tests.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen

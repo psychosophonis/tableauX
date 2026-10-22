@@ -499,6 +499,11 @@ Aim (Mat): "test my shows on a single screen in a kind of virtual display."
   "_N", work lengths and the preview use the design; a real show plays on
   the displays actually connected. (Before 0.3.13 the connected count
   overwrote the design, so a laptop shrank a 3-display show to 1.)
+- [claude] **A new show is sized by its works (0.3.14, from Mat's run):**
+  when this Mac's part is first made from the folder (the all-works show,
+  New show…) and when the conductor first adds a player, the count starts
+  at the most any work needs: its highest "_N" from that Mac's first
+  screen, or its number of videos; at least what is connected; at most 16.
 
 ### Zero setup (Mat, 2026-10-22)
 Aim (Mat): "minimise any step that requires going back to a client… send a

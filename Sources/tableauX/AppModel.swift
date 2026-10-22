@@ -352,6 +352,7 @@ final class AppModel: ObservableObject {
         // Same Macs and settings, fresh playlist: the installation is the same.
         show = Show(machines: show.machines, playlist: show.playlist, sync: show.sync)
         autoShow = true
+        sizeThisMacByWorks()
         scan()
         for inv in reported.values { show = SharedShow.merge(show, with: inv, conductor: Self.thisMac) }
         autoShow = false
@@ -416,6 +417,7 @@ final class AppModel: ObservableObject {
         // a folder of works plays without any setup (§ Library).
         if mode != .player, showPath == nil, show.works.isEmpty, !mediaFolder.isEmpty {
             autoShow = true
+            sizeThisMacByWorks()
             scan()
         }
     }
@@ -1057,6 +1059,16 @@ final class AppModel: ObservableObject {
     /// a scan assigns and what the preview shows. A real show plays on as
     /// many of them as are connected.
     var designDisplays: Int { max(machineIndex.map { show.machines[$0].displays } ?? 0, displays.count) }
+
+    /// [claude] Sizes this Mac's part by what its works need (the highest
+    /// "_N", or the most files in a work), when a show is first made from
+    /// the folder (Mat, 2026-10-22: a 1-display laptop left _2 and _3 unused).
+    /// Never shrinks.
+    private func sizeThisMacByWorks() {
+        guard let mi = machineIndex, let l = Self.listing(mediaFolder) else { return }
+        let needed = FolderScan.displaysNeeded(l.subfolders, firstScreen: firstScreen)
+        show.machines[mi].displays = min(max(show.machines[mi].displays, displays.count, needed), 16)
+    }
 
     /// "Displays in this show" for Mac `m`, set by hand (1–16). Shrinking
     /// keeps the panels beyond the count, unused, so growing again restores

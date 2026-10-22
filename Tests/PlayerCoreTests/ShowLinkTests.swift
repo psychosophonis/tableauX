@@ -102,6 +102,13 @@ final class SharedShowTests: XCTestCase {
         XCTAssertEqual(more.machines[1].displays, 4)
     }
 
+    func testAJoiningMacIsSizedByItsWorks() {
+        let s = Show(machines: [Machine(name: "A", displays: 3)])
+        let m = SharedShow.merge(s, with: inv("B", 1, ["W": [("W_4.mov", 5), ("W_5.mov", 5), ("W_6.mov", 5)]]), conductor: "A")
+        XCTAssertEqual(m.machines[1].displays, 3)                    // screens 4–6, though only 1 is plugged in
+        XCTAssertEqual(m.works[0].screens["B"]?.map(\.file), ["W/W_4.mov", "W/W_5.mov", "W/W_6.mov"])
+    }
+
     func testHandSetScreensAreKeptAndNewDisplaysFill() {
         let set = [PanelConfig(file: "Smith/3.mp4", audio: true)]
         var s = Show(machines: [Machine(name: "A")], works: [Work(name: "Smith", screens: ["B": set])])
