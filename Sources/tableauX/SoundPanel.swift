@@ -154,6 +154,12 @@ private struct MacSound: View {
     private var devicePicker: some View {
         Picker("Interface", selection: $sound.chosenDevice) {
             Text("Automatic" + (model.soundDevice.map { ": \($0.name)" } ?? "")).tag(String?.none)
+            // A chosen interface that's been unplugged stays visible, marked. A
+            // Picker whose selection matches no tag draws blank, which hides the
+            // fact that sound has moved to another device.
+            if let c = sound.chosenDevice, !c.isEmpty, !sound.devices.contains(where: { $0.uid == c }) {
+                Text("\(c) (not connected)").tag(String?.some(c))
+            }
             ForEach(sound.devices, id: \.uid) { d in
                 Text("\(d.name) (\(d.outputs) output\(d.outputs == 1 ? "" : "s"))").tag(String?.some(d.uid))
             }

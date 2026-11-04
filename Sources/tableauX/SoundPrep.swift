@@ -62,7 +62,13 @@ final class SoundPrep: ObservableObject {
     /// `~/Library/Caches`, because a bake is DERIVED DATA: it can always be made
     /// again from the sources. Caches is where macOS expects such files, and may
     /// empty it under disk pressure; the only cost is baking again.
-    static let folder: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    ///
+    /// `nonisolated` lifts ACTOR ISOLATION for this one value. The class is confined
+    /// to the main actor, so reaching its members from elsewhere normally means
+    /// waiting for that thread. Tidying up after a bake runs off it, and that's safe
+    /// here because this is an immutable constant: isolation protects mutable state,
+    /// and there's nothing here that two threads could race to change.
+    nonisolated static let folder: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("tableauX/sound", isDirectory: true)
 
     // MARK: Asking

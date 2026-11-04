@@ -171,7 +171,11 @@ tolerance. Preview stays silent if this Mac has too few outputs.
 To compose on one machine holding every Mac's files, use `audio/<Mac name or
 label>/` for each other Mac. Kits copy them across.
 
-Not yet tested on a real interface.
+**Check Interface before pressing Present or Preview.** Automatic uses this Mac's
+default output if it has enough outputs, so if that's your monitors, the work plays
+on your monitors at full level.
+
+Tested through the app on a virtual device, not yet on a real interface.
 
 ### Saving
 

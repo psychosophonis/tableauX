@@ -936,7 +936,8 @@ A setting per Mac, like the mode (the show travels, the interface doesn't). Firs
 match: the device chosen in setup if connected; the default output if it has
 enough outputs; the only non-virtual device with enough. Otherwise Present is
 blocked and says how many outputs are needed; a player reports this to the
-conductor as it does a missing file. Preview uses the same device if it has enough
+conductor as it does a missing file. A chosen device that isn't connected is
+skipped, with a note in setup, because sound then moves to the next match. Preview uses the same device if it has enough
 outputs, and otherwise is silent with a note, since Preview must work on a laptop.
 
 ### Playing

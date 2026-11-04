@@ -373,6 +373,12 @@ final class AppModel: ObservableObject {
                 out.append("\(work.name): a screen has Audio on, but this work has sound routes, so only those play. Send the screen's video to an output under Sound.")
             }
         }
+        // Falling back is only safe if it's said out loud: the default output may be
+        // a different room, or monitors left turned up.
+        if outputsNeeded > 0, let chosen = sound.chosenDevice, !chosen.isEmpty,
+           !sound.devices.contains(where: { $0.uid == chosen }), let d = soundDevice {
+            out.append("The interface chosen under Sound isn't connected, so sound will play on \(d.name).")
+        }
         return out
     }
 
@@ -1578,19 +1584,26 @@ final class AppModel: ObservableObject {
             } else {
                 startupStatus = nil
             }
+            // [claude] v5: an unattended gallery Mac's first launch may have
+            // sound to prepare. Present would refuse until it's ready, and nobody
+            // is there to press it again, so wait, as for measuring above. A preview
+            // wouldn't refuse: it would quietly start silent, so it waits as well.
+            //
+            // It scans first. A saved show otherwise waits for the 5 s rescan to
+            // notice a new sound file, and rescans pause during a show, so one that
+            // starts at launch would play its whole run without that file.
+            if wantsPresent || wantsPreview {
+                rescan()
+                while !startupSkipped, soundStillPreparing {
+                    startupStatus = "Preparing the sound…"
+                    refreshSound()
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+            }
             // [claude] P4e: `--preview` on the command line opens the preview
             // at launch, so it can be checked without a person clicking.
             if wantsPreview { startupStatus = nil; preview(); return }
             guard wantsPresent, !startupSkipped else { startupStatus = nil; return }
-            // [claude] v5: an unattended gallery Mac's first launch may have
-            // sound to prepare. Present would refuse until it's ready, and nobody
-            // is there to press it again, so wait, as for measuring above.
-            while !startupSkipped, soundStillPreparing {
-                startupStatus = "Preparing the sound…"
-                refreshSound()
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-            guard !startupSkipped else { startupStatus = nil; return }
             startupStatus = nil
             play()
         }

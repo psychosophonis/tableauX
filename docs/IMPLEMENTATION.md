@@ -435,22 +435,35 @@ Work in this release:
 - Esc, Space and multi-display starts exercised by Mat on the dev machine
   (two and three displays, 4K ProRes): all worked.
 
-## v5: multichannel sound (2026-11-05, not committed, not released)
+## v5: multichannel sound (2026-11-05, committed, not released)
 Built from § v5. `swift test`: 208 tests, 1 skipped (the loopback, which needs a
 named device).
 
-Checked, on a virtual 16-channel device only (Pro Tools Audio Bridge 16):
-`AudioLoopbackTests` plays a real bake with the app's AVPlayer settings and
-measures what comes back. Outputs correct, 0 samples apart, unused outputs silent,
-2-channel bake and output 16 included. Slope 0.00 ppm: this device is locked to the
-host clock, so it says nothing about T23.
+**First run of the real app (2026-11-05, MacBook Pro, dev build, sound forced to
+the virtual Pro Tools Audio Bridge 16, levels -50 dBFS tones and -40 dBFS clicks,
+because the Mac's default output was a Universal Audio Apollo with monitors on).**
+A throwaway library held mono, dual-mono and real stereo WAVs, plus a video whose
+AAC sound was routed to output 5. Measured at the device's inputs, in Preview and
+in Present alike:
+- Each source on its outputs: 1, 2 (dual mono, nothing on 3), 5, and 7-8 (stereo).
+  3, 4 and 6 silent. First clicks 0 samples apart, the video's sound included.
+- Setup: a device with too few outputs blocks Present with a clear message.
+  Automatic reads "Universal Audio Thunderbolt", the default output. No sound was
+  played to it.
+
+Bugs that run found, fixed in the same change: `--preview` didn't wait for the bake,
+so it started silent; a show starting at launch could miss a new sound file, because
+a saved show doesn't scan until the 5 s tick and rescans pause during a show; a
+chosen interface that's unplugged drew a blank menu while sound moved to the default
+output (now marked, with a note).
 
 NOT checked:
-- **The app itself has not been run with this.** The Sound table, device menu, and
-  `Playback`'s sound player compile, but nobody has seen them work.
-- Any real interface; T23 (the cable test); sound across two Macs.
-- A device with fewer outputs than the file: Present blocks this, Preview goes
-  silent, so the behaviour itself was never observed.
+- Any real interface: sound has never been measured leaving hardware, so T23 (the
+  cable test) is still the main risk. Nor has anyone listened to it.
+- Sound against picture: the video's sound lines up with the other sources, and its
+  decoded time is right, but sound against the picture on screen wasn't measured.
+- Sound across two Macs; the Sound table's controls under a person's hands (Add, the
+  steppers, the take menu, seen drawn but not clicked).
 - Student files from Premiere, After Effects or Resolve; the probes used ffmpeg and
   Apple's encoder.
 - A bake over 4 GB is refused rather than handled.
