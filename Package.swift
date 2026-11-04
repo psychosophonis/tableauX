@@ -3,7 +3,9 @@ import PackageDescription
 
 // Two targets on purpose: PlayerCore is pure logic (display order, show files,
 // sync arithmetic) with no AppKit and no AVFoundation playback, so `swift test`
-// can check it without a screen. The app target is the thin shell that turns
+// can check it without a screen. [claude] AudioBake does use AVFoundation, to read
+// and write files only: that needs neither a screen nor a sound device, so it can
+// be tested here sample by sample. The app target is the thin shell that turns
 // that logic into windows and players.
 let package = Package(
     name: "tableauX",

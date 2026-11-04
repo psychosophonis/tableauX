@@ -254,7 +254,138 @@ final class AppModel: ObservableObject {
 
     /// One play of work `w` on this Mac's own files: its longest file here.
     func ownLength(of w: Int) -> Double {
-        panels(of: w).prefix(designDisplays).compactMap { $0.file.flatMap { media[resolve($0)]?.duration } }.max() ?? 0
+        let video = panels(of: w).prefix(designDisplays).compactMap { $0.file.flatMap { media[resolve($0)]?.duration } }.max() ?? 0
+        // [claude] v5: a work lasts as long as its longest file, sound included.
+        guard show.works.indices.contains(w), let me = machineName else { return video }
+        return max(video, soundLength(of: show.works[w].routes(on: me)))
+    }
+
+    /// The longest sound file among some routes, as far as it's measured here.
+    /// Read from the raw measurements, not the plan: the plan's bake length
+    /// depends on the work's length, so going through it would be a cycle.
+    private func soundLength(of routes: [AudioRoute]) -> Double {
+        routes.compactMap { $0.file.flatMap { sound.facts[resolve($0)]?.duration } }.max() ?? 0
+    }
+
+    // MARK: Sound (§ v5) [claude]
+
+    let sound = SoundPrep()
+
+    func routes(on m: String) -> [AudioRoute] {
+        show.works.indices.contains(selectedWork) ? show.works[selectedWork].routes(on: m) : []
+    }
+
+    /// A person's edit. On a player the show is the conductor's, so it's told, and
+    /// shares it back: the same path as a screen edit (`setPanel`).
+    func setRoutes(_ routes: [AudioRoute], on m: String) {
+        guard show.works.indices.contains(selectedWork) else { return }
+        show.works[selectedWork].setRoutes(routes, on: m)
+        if mode == .player, linkUp {
+            linkClient?.send(.setAudio(machine: m, work: show.works[selectedWork].name, routes: routes))
+        }
+    }
+
+    private func soundRequest(machine m: String, work w: Int) -> SoundRequest? {
+        guard show.works.indices.contains(w) else { return nil }
+        let work = show.works[w], routes = work.routes(on: m)
+        guard !routes.isEmpty else { return nil }
+        let panels = work.screens[m] ?? []
+        let paths = routes.map { r -> String? in
+            if let f = r.file { return resolve(f) }
+            guard let s = r.screen, s < panels.count else { return nil }
+            return panels[s].file.map(resolve)
+        }
+        let looping = work.shorter == .loop
+        return SoundRequest(work: work.name, machine: m, routes: routes, paths: paths, looping: looping,
+                            minimumLength: looping ? length(of: w) : 0, bakeHere: m == machineName)
+    }
+
+    func soundState(machine m: String, work w: Int) -> SoundState? {
+        soundRequest(machine: m, work: w).map(sound.state)
+    }
+
+    /// The most outputs any work needs on this Mac.
+    private var outputsNeeded: Int {
+        guard let me = machineName else { return 0 }
+        return show.works.indices.compactMap { soundState(machine: me, work: $0)?.plan.outputs }.max() ?? 0
+    }
+
+    /// The device this Mac's sound would play on.
+    var soundDevice: AudioOutputs.Device? { sound.device(needed: max(outputsNeeded, 1)) }
+
+    /// Measures what's here and bakes what's missing. Not during a show: nothing
+    /// should compete with the players for the disk.
+    private func refreshSound() {
+        guard !isPlaying else { return }
+        sound.refreshDevices()
+        var requests: [SoundRequest] = []
+        for w in show.works.indices {
+            for m in show.machines.map(\.name) {
+                if let r = soundRequest(machine: m, work: w) { requests.append(r) }
+            }
+        }
+        sound.refresh(requests)
+    }
+
+    /// What about this Mac's sound stops it presenting. A player sends these to
+    /// the conductor with its missing files, so the composer sees them too.
+    private func soundProblems() -> [String] {
+        guard let me = machineName else { return [] }
+        var out: [String] = []
+        for (w, work) in show.works.enumerated() {
+            guard let s = soundState(machine: me, work: w) else { continue }
+            out += s.plan.problems.map { "\(work.name), sound: \($0)" }
+            switch s.status {
+            case .reading: out.append("\(work.name): still reading the sound files…")
+            case .baking: out.append("\(work.name): preparing the sound…")
+            case .failed(let why): out.append("\(work.name), sound: \(why)")
+            case .none, .ready: break
+            }
+        }
+        let needed = outputsNeeded
+        if needed > 0 {
+            if let d = soundDevice {
+                if d.outputs < needed { out.append("Sound needs \(needed) outputs, and \(d.name) has \(d.outputs).") }
+            } else {
+                out.append("Sound needs \(needed) outputs, and tableauX can't tell which interface to use: choose one under Sound.")
+            }
+        }
+        return out
+    }
+
+    /// Is any work's sound on this Mac still being measured or baked?
+    private var soundStillPreparing: Bool {
+        guard let me = machineName else { return false }
+        return show.works.indices.contains { w in
+            let status = soundState(machine: me, work: w)?.status
+            return status == .reading || status == .baking
+        }
+    }
+
+    /// Notes about this Mac's sound that don't stop the show.
+    private func soundWarnings() -> [String] {
+        guard let me = machineName else { return [] }
+        var out: [String] = []
+        for (w, work) in show.works.enumerated() {
+            guard let s = soundState(machine: me, work: w) else { continue }
+            out += s.plan.warnings.map { "\(work.name), sound: \($0)" }
+            if panels(of: w).contains(where: \.audio) {
+                out.append("\(work.name): a screen has Audio on, but this work has sound routes, so only those play. Send the screen's video to an output under Sound.")
+            }
+        }
+        return out
+    }
+
+    /// The bake to play for work `w`, if it's ready and the device can carry it.
+    private func soundPart(of w: Int) -> SoundPart? {
+        guard let me = machineName, let s = soundState(machine: me, work: w), s.status == .ready,
+              let d = soundDevice, d.outputs >= s.plan.outputs else { return nil }
+        let looping = show.works[w].shorter == .loop
+        return SoundPart(file: s.file.path, duration: max(s.plan.length, looping ? length(of: w) : 0), device: d.uid)
+    }
+
+    private func hasRoutes(_ w: Int) -> Bool {
+        machineName.map { !show.works[w].routes(on: $0).isEmpty } ?? false
     }
 
     /// One play of work `w` (§ v4 › Playing): its longest file on ANY Mac.
@@ -600,12 +731,15 @@ final class AppModel: ObservableObject {
             return
         }
         var inventory: [String: [InventoryFile]] = [:]
+        var sounds: [String: [InventoryFile]] = [:]       // [claude] v5
         var left: [String: [String]] = [:]
         for folder in folders where !folder.hasPrefix(".") {
             let path = (mediaFolder as NSString).appendingPathComponent(folder)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue,
                   let files = try? fm.contentsOfDirectory(atPath: path) else { continue }
+            let found = SoundPrep.listing(workFolder: path)
+            if !found.isEmpty { sounds[folder] = found.map { InventoryFile(name: $0, duration: 0) } }
             let videos = FolderScan.videos(files)
             guard !videos.isEmpty else { continue }
             // Durations aren't known yet; the merge only needs the names.
@@ -615,8 +749,10 @@ final class AppModel: ObservableObject {
         }
         // [claude] P4d: only the unsaved all-works show gains works here; a
         // saved show is curated, and new folders wait in the library pool.
-        let merged = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: designDisplays, folders: inventory)],
-                                         firstScreens: [name: firstScreen], addingNewWorks: autoShow)
+        let label = show.machines.first { $0.name == name }?.label
+        let merged = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: designDisplays, folders: inventory, audio: sounds)],
+                                         firstScreens: [name: firstScreen], addingNewWorks: autoShow,
+                                         labels: label.map { [name: $0] } ?? [:])
         // [claude] Only assign when something changed: rescans run every few
         // seconds, and every assignment would otherwise trigger an autosave.
         if merged != show.works { show.works = merged }
@@ -699,7 +835,12 @@ final class AppModel: ObservableObject {
     }
 
     private func aheadLength(of w: Int) -> Double {
-        aheadFiles(of: w).compactMap { media[$0]?.duration }.max() ?? 0
+        let video = aheadFiles(of: w).compactMap { media[$0]?.duration }.max() ?? 0
+        guard show.works.indices.contains(w), mode != .player else { return video }
+        // [claude] v5: their sound too, as far as this Mac holds the files.
+        let sounds = show.machines.filter { $0.name != machineName && reported[$0.name] == nil }
+            .map { soundLength(of: show.works[w].routes(on: $0.name)) }
+        return max(video, sounds.max() ?? 0)
     }
 
     // MARK: Collect and import (§ v4 › Collecting and importing) [claude]
@@ -814,6 +955,7 @@ final class AppModel: ObservableObject {
                 for w in plan.works {
                     guard let i = self.show.works.firstIndex(where: { $0.name == w.name }) else { continue }
                     self.show.works[i].screens[name] = w.screens[name]
+                    self.show.works[i].setRoutes(w.routes(on: name), on: name)      // [claude] v5
                 }
                 self.libraryNote = "Collected \(copies.count) file(s) into the library" + (missing > 0 ? "; \(missing) couldn't be found." : ".")
                 NSLog("collect: done")
@@ -936,6 +1078,25 @@ final class AppModel: ObservableObject {
 
     init() {
         refreshDisplays()
+        // [claude] v5: a finished measure or bake can clear a blocking problem,
+        // complete a player's inventory, or change a work's length.
+        //
+        // `objectWillChange.send()` is needed because SwiftUI's observation is
+        // SHALLOW: an ObservableObject held inside another doesn't pass on its
+        // changes, so views watching this model (the status line, Present) would
+        // never hear that `sound` moved on. Forwarding by hand is the usual fix.
+        // `[weak self]` avoids a RETAIN CYCLE: the model owns `sound`, and `sound`
+        // owns this closure, so a strong capture would keep both alive forever.
+        sound.onChange = { [weak self] in
+            guard let self else { return }
+            self.objectWillChange.send()
+            switch self.mode {
+            case .conductor: self.scheduleShare()
+            case .player: self.refreshInventory(); self.sendReport()
+            case .standalone: break
+            }
+            self.refreshSound()
+        }
         // Re-read displays whenever one is plugged in, unplugged or rearranged.
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -1157,6 +1318,9 @@ final class AppModel: ObservableObject {
             // and shared back, so every Mac has one version of the show.
             NSLog("link: %@ set %@ screen %d to %@", machine, work, index + 1, panel.file ?? "black")
             show = SharedShow.setScreen(show, machine: machine, work: work, index: index, panel: panel)
+        case .setAudio(let machine, let work, let routes):
+            NSLog("link: %@ set %d sound route(s) on %@", machine, routes.count, work)
+            show = SharedShow.setAudio(show, machine: machine, work: work, routes: routes)
         case .show:
             break                            // only a conductor sends these
         }
@@ -1228,10 +1392,26 @@ final class AppModel: ObservableObject {
         guard mode == .player, linkUp, !mediaFolder.isEmpty else { return }
         let fm = FileManager.default
         var folders: [String: [InventoryFile]] = [:]
+        var sounds: [String: [InventoryFile]] = [:]
         var complete = true
         for folder in (try? fm.contentsOfDirectory(atPath: mediaFolder)) ?? [] where !folder.hasPrefix(".") {
             let dir = (mediaFolder as NSString).appendingPathComponent(folder)
             guard let names = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            // [claude] v5: its sound files, measured, so the conductor can make
+            // routes and count them in the work's length. Every per-Mac subfolder
+            // is listed: the conductor knows this Mac's label and picks by it.
+            var soundFiles: [InventoryFile] = []
+            for name in SoundPrep.listing(workFolder: dir) {
+                let path = ((dir as NSString).appendingPathComponent(AudioScan.folderName) as NSString).appendingPathComponent(name)
+                guard let a = try? fm.attributesOfItem(atPath: path) else { continue }
+                sound.want(path)
+                if sound.unreadable[path] != nil { continue }
+                guard let f = sound.facts[path] else { complete = false; continue }
+                soundFiles.append(InventoryFile(name: name, size: (a[.size] as? Int64) ?? 0,
+                                                modified: (a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0,
+                                                duration: f.duration, fps: 0, hasAudio: true))
+            }
+            if !soundFiles.isEmpty { sounds[folder] = soundFiles }
             var files: [InventoryFile] = []
             for name in FolderScan.videos(names) {
                 let path = (dir as NSString).appendingPathComponent(name)
@@ -1265,7 +1445,7 @@ final class AppModel: ObservableObject {
             }
         }
         guard complete else { return }                           // try again when the measuring is done
-        let inv = Inventory(machine: Self.thisMac, displays: displays.count, folders: folders)
+        let inv = Inventory(machine: Self.thisMac, displays: displays.count, folders: folders, audio: sounds.isEmpty ? nil : sounds)
         if inv != sentInventory {
             sentInventory = inv
             linkClient?.send(.inventory(inv))
@@ -1299,6 +1479,7 @@ final class AppModel: ObservableObject {
         if line != remoteStatus { remoteStatus = line }          // [claude] the remote controls' line
         server?.broadcast()          // the once-a-second repeat of the show state
         if statusTicks % 5 == 0 { refreshInventory(); sendReport(); rescan() }    // [claude] player: inventory; others: the library
+        refreshSound()
         if let server {
             let players = server.players()
             clockStatus = "Conductor: answering clock requests on \(server.addresses.joined(separator: ", "))"
@@ -1401,6 +1582,15 @@ final class AppModel: ObservableObject {
             // at launch, so it can be checked without a person clicking.
             if wantsPreview { startupStatus = nil; preview(); return }
             guard wantsPresent, !startupSkipped else { startupStatus = nil; return }
+            // [claude] v5: an unattended gallery Mac's first launch may have
+            // sound to prepare. Present would refuse until it's ready, and nobody
+            // is there to press it again, so wait, as for measuring above.
+            while !startupSkipped, soundStillPreparing {
+                startupStatus = "Preparing the sound…"
+                refreshSound()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            guard !startupSkipped else { startupStatus = nil; return }
             startupStatus = nil
             play()
         }
@@ -1597,6 +1787,7 @@ final class AppModel: ObservableObject {
         // players for the disk; a collect is short and run by a person.
         if collecting != nil { blocking.append("Wait for the collect to finish.") }
         blocking += fileProblems()
+        warnings += soundWarnings()
         for work in show.works {
             if let extra = leftOver[work.name] {
                 warnings.append("\(work.name): \(extra.count) file(s) not used on this Mac (more files than displays, or numbered for another screen): \(extra.joined(separator: ", ")).")
@@ -1649,6 +1840,7 @@ final class AppModel: ObservableObject {
                 else if media[f] == nil { out.append("\(work.name), display \(i + 1): still reading the file…") }
             }
         }
+        out += soundProblems()
         return out
     }
 
@@ -1790,7 +1982,7 @@ final class AppModel: ObservableObject {
                                        uniquingKeysWith: { a, _ in a })
             let work = show.works[w]
             return WorkPart(name: work.name, panels: Array(ps), durations: durations, length: length(of: w),
-                            repeat: work.repeat, shorter: work.shorter)
+                            repeat: work.repeat, shorter: work.shorter, routed: hasRoutes(w), sound: soundPart(of: w))
         }
         lastError = nil
         // The setup window is hidden only once the panel windows are up, never
@@ -1962,8 +2154,14 @@ final class AppModel: ObservableObject {
             // lengths (a player's are the conductor's). On its own, a Mac
             // may also use the longest file it happens to have.
             let len = mode == .standalone ? max(length(of: w), durations.values.max() ?? 0) : length(of: w)
+            // [claude] v5: the preview only sounds if this Mac can carry the work
+            // (soundPart checks); a laptop previewing an array stays silent, and
+            // says so below, since Preview must not depend on the interface.
             return WorkPart(name: work.name, panels: ps, durations: durations, length: len,
-                            repeat: work.repeat, shorter: work.shorter)
+                            repeat: work.repeat, shorter: work.shorter, routed: hasRoutes(w), sound: soundPart(of: w))
+        }
+        if parts.contains(where: { $0.routed && $0.sound == nil }) {
+            libraryNote = "Preview is silent for works whose sound isn't ready or needs more outputs than this Mac has."
         }
         guard s != nil || parts.contains(where: { $0.length > 0 }) else {
             lastError = "Nothing to preview: none of this show's files are on this Mac."

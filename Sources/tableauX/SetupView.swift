@@ -68,6 +68,7 @@ struct SetupView: View {
                 WorkSettingsRow(work: $model.show.works[model.selectedWork], length: model.length(of: model.selectedWork))
                     .disabled(model.mode == .player)
                 TableauMap(model: model)
+                SoundPanel(model: model, sound: model.sound)      // [claude] v5
             }
             Divider()
             SyncRow(sync: $model.show.sync)

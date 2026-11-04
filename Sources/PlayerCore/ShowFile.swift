@@ -122,6 +122,7 @@ public struct Show: Codable, Equatable {
         s.machines[i].name = realName
         for w in s.works.indices {
             if let panels = s.works[w].screens.removeValue(forKey: part) { s.works[w].screens[realName] = panels }
+            s.works[w].moveRoutes(from: part, to: realName)
         }
         return s
     }
@@ -131,7 +132,10 @@ public struct Show: Codable, Equatable {
     public func removingMachine(_ name: String) -> Show {
         var s = self
         s.machines.removeAll { $0.name == name }
-        for w in s.works.indices { s.works[w].screens[name] = nil }
+        for w in s.works.indices {
+            s.works[w].screens[name] = nil
+            s.works[w].setRoutes(nil, on: name)
+        }
         return s
     }
 }

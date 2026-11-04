@@ -135,6 +135,46 @@ buttons at the top:
   black, then start together. **Space** pauses and resumes, **→ / ←**
   change work, **Esc** comes back to the window.
 
+### Multichannel sound
+
+No DAW needed: put a work's sound files in an `audio` folder inside its folder,
+on the Mac that plays them, and name each for its output:
+
+```
+Works/Smith/
+  Smith_1.mov
+  audio/
+    front_1.wav      output 1
+    rear_5.wav       output 5
+```
+
+Output numbers belong to that Mac's interface, so each Mac starts at 1. Files with
+no number take the lowest free outputs. The **Sound** table under the screens lists
+every source with the output it goes to, and **Add** sends a screen's video sound
+there too. tableauX combines them into one prepared file in the background, and
+Present waits for it.
+
+**A stereo file meant for one speaker:** on **Automatic**, a file with both sides
+the same, or one side silent, takes one output. A real stereo file takes outputs N
+and N+1 if N+1 is free. If another file wants N+1, as in an array of stereo exports
+numbered 1, 2, 3, each is summed to its one speaker. The note beside each row says
+what was decided. Automatic can guess wrong, for example on dual-mono noise through
+some AAC encoders, so check the notes and use **Pair**, **Sum to one**, **Left** or
+**Right** to overrule it. **Off** silences a source.
+
+**The interface:** tableauX uses the Mac's default output if it has enough outputs,
+otherwise the only real interface that does; choose under **Interface** if there
+are several. An array that must be phase-coherent belongs on one interface: outputs
+on one Mac are sample-aligned, but between Macs they only hold to the sync
+tolerance. Preview stays silent if this Mac has too few outputs.
+
+To compose on one machine holding every Mac's files, use `audio/<Mac name or
+label>/` for each other Mac. Kits copy them across.
+
+Not yet tested on a real interface.
+
+### Saving
+
 A show saves itself as you change it, once it has a name (New show…, or
 **Save…** for the automatic "All works" show). **Save As…** makes a copy
 under a new name. For an unattended installation, tick **Start presenting

@@ -51,9 +51,41 @@ public struct Work: Codable, Equatable {
     public var screens: [String: [PanelConfig]]   // Mac name → its displays' panels
     public var `repeat`: Repeat
     public var shorter: Shorter
+    /// [claude] v5: Mac name → its sound routes (§ v5).
+    ///
+    /// ADDITIVE SCHEMA EVOLUTION: a new optional field, so Swift's Codable reads an
+    /// older show file as nil and the version number stays at 3. A version bump is
+    /// for a change an old reader could misunderstand (see ShowFile). This one is
+    /// safe to ignore, and a work with no routes plays exactly as it always did.
+    public var audio: [String: [AudioRoute]]?
 
-    public init(name: String, screens: [String: [PanelConfig]] = [:], repeat: Repeat = .once, shorter: Shorter = .black) {
-        self.name = name; self.screens = screens; self.repeat = `repeat`; self.shorter = shorter
+    public init(name: String, screens: [String: [PanelConfig]] = [:], repeat: Repeat = .once, shorter: Shorter = .black,
+                audio: [String: [AudioRoute]]? = nil) {
+        self.name = name; self.screens = screens; self.repeat = `repeat`; self.shorter = shorter; self.audio = audio
+    }
+
+    /// A Mac's routes follow it when its name in the show changes.
+    public mutating func moveRoutes(from old: String, to new: String) {
+        guard let moved = audio?[old] else { return }
+        setRoutes(nil, on: old)
+        setRoutes(moved, on: new)
+    }
+
+    /// A Mac's routes in this work; empty if it has none.
+    public func routes(on machine: String) -> [AudioRoute] { audio?[machine] ?? [] }
+
+    /// Sets a Mac's routes, leaving `audio` nil rather than empty.
+    ///
+    /// A CANONICAL FORM: "no routes" has several possible spellings here (nil, an
+    /// empty dictionary, a dictionary holding an empty list), and this keeps it to
+    /// one. It matters because the show is compared with `==` to decide whether
+    /// anything changed, which drives autosave and sharing with players: two
+    /// spellings of the same meaning would compare as different and look like an
+    /// edit. It also means a show that never used sound writes the same file as before.
+    public mutating func setRoutes(_ routes: [AudioRoute]?, on machine: String) {
+        var all = audio ?? [:]
+        all[machine] = (routes?.isEmpty ?? true) ? nil : routes
+        audio = all.isEmpty ? nil : all
     }
 }
 
@@ -239,9 +271,13 @@ public struct Inventory: Codable, Equatable {
     public var machine: String
     public var displays: Int
     public var folders: [String: [InventoryFile]]   // folder name → its video files
+    /// [claude] v5: work folder → the sound files in its `audio/` folder, each
+    /// named relative to it ("a_1.wav", "Gallery 2/b.wav"). Kept apart from
+    /// `folders`, whose every key is a work and every file a screen's video.
+    public var audio: [String: [InventoryFile]]?
 
-    public init(machine: String, displays: Int, folders: [String: [InventoryFile]]) {
-        self.machine = machine; self.displays = displays; self.folders = folders
+    public init(machine: String, displays: Int, folders: [String: [InventoryFile]], audio: [String: [InventoryFile]]? = nil) {
+        self.machine = machine; self.displays = displays; self.folders = folders; self.audio = audio
     }
 }
 
@@ -264,8 +300,11 @@ public enum PlaylistMerge {
     /// [claude] `addingNewWorks` false (P4d): a SAVED show is curated, so
     /// folders it doesn't name stay in the library pool and only the show's
     /// own works get screens. True for the unsaved all-works show.
+    ///
+    /// [claude] v5: each Mac's sound files become routes the same way
+    /// (AudioScan.routes). `labels` gives a Mac's label, for its subfolder.
     public static func merge(_ works: [Work], with inventories: [Inventory], firstScreens: [String: Int] = [:],
-                             addingNewWorks: Bool = true) -> [Work] {
+                             addingNewWorks: Bool = true, labels: [String: String] = [:]) -> [Work] {
         var result = works
         let known = Set(works.map(\.name))
         // [claude] Full-path folders are a player's linked files, not works
@@ -279,6 +318,12 @@ public enum PlaylistMerge {
                 result[i].screens[inv.machine] = FolderScan.assign(folder: result[i].name, files: files.map(\.name),
                                                                    displays: inv.displays,
                                                                    firstScreen: firstScreens[inv.machine] ?? 1).panels
+            }
+            for inv in inventories {
+                guard let files = inv.audio?[result[i].name] else { continue }
+                let names = AudioScan.own(files.map(\.name), machine: inv.machine, label: labels[inv.machine])
+                let routes = AudioScan.routes(existing: result[i].audio?[inv.machine], folder: result[i].name, names: names)
+                if routes != result[i].audio?[inv.machine] { result[i].setRoutes(routes, on: inv.machine) }
             }
         }
         return result
@@ -294,6 +339,11 @@ public enum PlaylistMerge {
                 let folder = (path as NSString).deletingLastPathComponent
                 let name = (path as NSString).lastPathComponent
                 if let f = inv.folders[folder]?.first(where: { $0.name == name }) { longest = max(longest, f.duration) }
+            }
+            // [claude] v5: a work lasts as long as its longest file, sound included.
+            for route in work.routes(on: inv.machine) {
+                guard let path = route.file else { continue }       // a screen's video is counted above
+                if let f = inv.audio?[work.name]?.first(where: { AudioScan.path(work.name, $0.name) == path }) { longest = max(longest, f.duration) }
             }
         }
         return longest

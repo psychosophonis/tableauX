@@ -435,6 +435,26 @@ Work in this release:
 - Esc, Space and multi-display starts exercised by Mat on the dev machine
   (two and three displays, 4K ProRes): all worked.
 
+## v5: multichannel sound (2026-11-05, not committed, not released)
+Built from § v5. `swift test`: 208 tests, 1 skipped (the loopback, which needs a
+named device).
+
+Checked, on a virtual 16-channel device only (Pro Tools Audio Bridge 16):
+`AudioLoopbackTests` plays a real bake with the app's AVPlayer settings and
+measures what comes back. Outputs correct, 0 samples apart, unused outputs silent,
+2-channel bake and output 16 included. Slope 0.00 ppm: this device is locked to the
+host clock, so it says nothing about T23.
+
+NOT checked:
+- **The app itself has not been run with this.** The Sound table, device menu, and
+  `Playback`'s sound player compile, but nobody has seen them work.
+- Any real interface; T23 (the cable test); sound across two Macs.
+- A device with fewer outputs than the file: Present blocks this, Preview goes
+  silent, so the behaviour itself was never observed.
+- Student files from Premiere, After Effects or Resolve; the probes used ffmpeg and
+  Apple's encoder.
+- A bake over 4 GB is refused rather than handled.
+
 ## Open questions
 - ~~Is building a 2000-segment composition fast enough?~~ Answered by
   `proofs/compose-time.swift`: 0.03–0.05 s to build, ready 0.02–0.06 s later

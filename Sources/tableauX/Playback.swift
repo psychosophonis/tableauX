@@ -94,12 +94,26 @@ struct WorkPart {
     let length: Double              // one play: the work's longest file (0 = nothing here)
     let `repeat`: Repeat
     let shorter: Shorter
+    /// [claude] v5: this work has sound routes on this Mac, so its screens'
+    /// players stay muted: their sound, if routed, is in the bake.
+    var routed = false
+    /// The bake, when it's ready and there is a device to play it.
+    var sound: SoundPart?
 }
 
-/// One panel during one work.
+/// [claude] v5: a work's multichannel sound, ready to play (§ v5 › Playing).
+struct SoundPart {
+    let file: String
+    let duration: Double
+    let device: String
+}
+
+/// One panel during one work. [claude] v5: a work's sound is a panel with no
+/// window and no layer. Treating it as one is what gives it the shared start, the
+/// item layout, the end handling and the drift check with no new code for any.
 @MainActor
 private final class LivePanel {
-    let window: PanelWindow
+    let window: PanelWindow?
     let player: AVPlayer?           // nil = this display just stays black
     let layer: AVPlayerLayer?
     let itemDuration: Double        // the whole laid-out item (ItemLayout)
@@ -109,7 +123,7 @@ private final class LivePanel {
     var gate: DriftGate             // [claude] the grace period, per panel (§ Sync)
     var finished = false            // [claude] its item ended before the work did: black until the work ends
 
-    init(window: PanelWindow, player: AVPlayer?, layer: AVPlayerLayer?, itemDuration: Double, wraps: Bool, frame: Double, grace: Double) {
+    init(window: PanelWindow?, player: AVPlayer?, layer: AVPlayerLayer?, itemDuration: Double, wraps: Bool, frame: Double, grace: Double) {
         self.window = window; self.player = player; self.layer = layer
         self.itemDuration = itemDuration; self.wraps = wraps; self.frame = frame
         self.gate = DriftGate(grace: grace)
@@ -437,13 +451,38 @@ final class Playback {
                 // on a player that's allowed to wait for buffering.
                 player.automaticallyWaitsToMinimizeStalling = false
                 player.masterClock = hostClock
-                player.isMuted = !config.audio
+                player.isMuted = !config.audio || work.routed
                 // At the end of the item, hold still rather than advance; the
                 // end is either the work's end or this screen's black (observeEnds).
                 player.actionAtItemEnd = .pause
                 let layer = attach(player, to: surface, scaling: config.scaling)
                 built.append(LivePanel(window: window, player: player, layer: layer, itemDuration: itemDuration,
                                        wraps: work.repeat == .untilNext, frame: 1 / max(fps, 1), grace: sync.grace))
+            }
+            // [claude] v5: the work's sound, as one more panel. Same layout and
+            // same clock as the screens, on the chosen device. It's built last so
+            // a screen's index in `surfaces` still matches its place in `built`.
+            //
+            // Two limits of treating it as a panel, both left visible:
+            //  1. A resync is a seek. On a picture that's a small jump, but on sound
+            //     it's an audible click, under the same tolerance and grace.
+            //  2. The drift check reads the item's TIMEBASE, which follows the host
+            //     clock by construction. The device runs on its own CRYSTAL OSCILLATOR
+            //     (this Mac's speakers: +8.67 ppm, parts per million, so 8.67 µs gained
+            //     each second). If AVPlayer doesn't correct for that, sound could drift
+            //     while the check reports all is well. That's untested on real
+            //     hardware: T23, `AudioLoopbackTests`, spec § v5 › Riskiest assumption.
+            if let sound = work.sound, sound.duration > 0 {
+                let pieces = ItemLayout.pieces(fileDuration: sound.duration, workLength: work.length, repeat: work.repeat,
+                                               shorter: work.shorter, cover: Self.cover, maxPieces: Self.maxSegments)
+                let (item, itemDuration, _) = try await Self.makeItem(URL(fileURLWithPath: sound.file), pieces: pieces)
+                let player = AVPlayer(playerItem: item)
+                player.audioOutputDeviceUniqueID = sound.device
+                player.automaticallyWaitsToMinimizeStalling = false
+                player.masterClock = hostClock
+                player.actionAtItemEnd = .pause
+                built.append(LivePanel(window: nil, player: player, layer: nil, itemDuration: itemDuration,
+                                       wraps: work.repeat == .untilNext, frame: 1.0 / 30, grace: sync.grace))
             }
             // Wait for every item to be ready, then PREROLL: decode the first frames
             // ahead so the start is only a clock being released, not a cold decode.

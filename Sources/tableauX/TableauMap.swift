@@ -177,6 +177,11 @@ private struct ScreenTile: View {
                         .lineLimit(2)
                     HStack(spacing: 4) {
                         if panel.wrappedValue.audio { Image(systemName: "speaker.wave.2.fill") }
+                        // [claude] v5: this screen's video is sent to an output.
+                        if let r = model.routes(on: machine).first(where: { $0.screen == index }), r.output > 0 {
+                            Image(systemName: "speaker.wave.2.fill")
+                            Text("out \(r.output)")
+                        }
                         if panel.wrappedValue.scaling == .fill { Text("Fill") }
                         if !connected { Text("not here") }
                     }

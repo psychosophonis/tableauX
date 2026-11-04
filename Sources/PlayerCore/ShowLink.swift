@@ -33,6 +33,8 @@ public enum LinkMessage: Codable, Equatable, @unchecked Sendable {
     /// changes should report back to the conductor"). The conductor records
     /// it in the show and shares the show back.
     case setScreen(machine: String, work: String, index: Int, panel: PanelConfig)
+    /// [claude] v5: the same for a player's sound routes in one work.
+    case setAudio(machine: String, work: String, routes: [AudioRoute])
 }
 
 /// Cutting messages out of a TCP byte stream.
@@ -112,6 +114,7 @@ public enum SharedShow {
             s.machines[0].name = conductor
             for w in s.works.indices {
                 if let panels = s.works[w].screens.removeValue(forKey: lone) { s.works[w].screens[conductor] = panels }
+                s.works[w].moveRoutes(from: lone, to: conductor)
             }
         }
         // [claude] A Mac's display count is the show's DESIGN (Mat,
@@ -135,8 +138,9 @@ public enum SharedShow {
         asDesigned.displays = designed
         // The machine is in the show now, so its place in the tableau is known.
         let first = firstScreen(s, of: inventory.machine)
+        let label = s.machines.first { $0.name == inventory.machine }?.label
         s.works = PlaylistMerge.merge(s.works, with: [asDesigned], firstScreens: [inventory.machine: first],
-                                      addingNewWorks: addingNewWorks)
+                                      addingNewWorks: addingNewWorks, labels: label.map { [inventory.machine: $0] } ?? [:])
         for w in s.works.indices {
             let set = s.works[w].screens[inventory.machine] ?? []
             guard let folder = FolderScan.folder(of: set, work: s.works[w].name),
@@ -182,6 +186,16 @@ public enum SharedShow {
         while panels.count <= index { panels.append(PanelConfig()) }
         panels[index] = panel
         s.works[w].screens[machine] = panels
+        return s
+    }
+
+    /// [claude] v5: the show with one Mac's sound routes in one work set (a
+    /// player's own edit, LinkMessage.setAudio). Unknown work or Mac: unchanged.
+    public static func setAudio(_ show: Show, machine: String, work: String, routes: [AudioRoute]) -> Show {
+        guard show.machines.contains(where: { $0.name == machine }),
+              let w = show.works.firstIndex(where: { $0.name == work }) else { return show }
+        var s = show
+        s.works[w].setRoutes(routes, on: machine)
         return s
     }
 

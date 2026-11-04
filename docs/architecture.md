@@ -11,8 +11,9 @@ lab screen array (BCM116: a Mac mini driving three 4K displays). It replaces
 and produces artefacts.
 
 Non-goals (v1): network sync between computers (planned: see "v3"
-below), projection warping or edge blending, routing audio to particular
-output devices, playlists (see "v4"), editing.
+below), projection warping or edge blending, playlists (see "v4"), editing.
+[claude] Routing audio to particular outputs was a non-goal until 2026-11-05:
+see "v5".
 
 ## Targets (measurable)
 
@@ -848,6 +849,127 @@ shows that doing it every few minutes is clean. The cheapest test is a probe
 on one Mac (then the Mac mini): cycle three 4K items every 10 s for an hour,
 logging each load time and the process's memory. It needs no playlist code.
 
+## v5: multichannel sound (Mat, 2026-11-05)
+
+<!-- [claude] From Mat: multiscreen works often have multichannel sound in set
+configurations (stereo per screen, a surround array). The university's Behringer
+interface currently needs a DAW to assign channels, "an unnecessary complication
+for installs". Marked (Mat) where Mat decided or confirmed; the rest is Claude's
+proposal, for Mat to confirm. Sending files between Macs is left out for now
+(Mat: "don't worry about that for now"): files reach a Mac the way video does. -->
+
+### Idea
+Each Mac plays its work's sound through its own interface. A folder of files
+becomes one multichannel WAV ("the bake"), which plays as one more AVPlayer in
+the work, on the same clock and drift check as the screens. No DAW, and no
+separate audio engine.
+
+Why bake, from the probes below: AVPlayer delivers a discrete WAV's channels to
+discrete outputs, sample-aligned, but mixes a composition of mono tracks into one
+channel. So the folder can't be played as it stands, and one file can.
+
+### Getting sound in
+- `<work>/audio/` on a Mac holds that Mac's sound files: wav, aif, aiff, m4a,
+  mp3. Scan and inventory look there; a folder of only sound isn't a work.
+- **Outputs are per Mac (Mat):** `_N` before the extension means output N of
+  that Mac's interface, not counted across the tableau as screens are. Unnumbered
+  files take the lowest free outputs in name order.
+- **Composing ahead (Mat):** on a machine holding every Mac's files,
+  `<work>/audio/<Mac name or label>/` is that Mac's sound, and loose files in
+  `audio/` are this Mac's. A Mac with its own subfolder uses only that. Kits copy
+  files at the same paths, so the rule holds on the gallery Mac.
+- **Outputs only, no presets (Mat):** a route says which output a source starts
+  on. There are no named layouts such as 5.1 or "stereo per screen".
+- Routes are stored in the show, as screens are: filled in from the folder when
+  first seen, new files added on a rescan, routes already set never disturbed.
+  **Output 0 is Off:** the way to silence a folder's file, since removing its
+  route would only bring it back on the next rescan.
+- Collect and Kits carry sound files; the bake is never copied. An archive's show
+  file keeps the routes, but importing the archive without it reads outputs from
+  the file names again, so a route set by hand is lost that way. (Screens rename
+  files to survive this; sound doesn't yet.)
+- **A screen's video sound is a source too (Mat):** any screen can be sent to an
+  output, in the same table as the files. It joins the bake and that screen's own
+  player is muted, so every source in a work is sample-aligned. Off by default,
+  like `Panel.audio`.
+- A work with any routes on a Mac plays only those on that Mac. `Panel.audio`
+  (the Mac's default output) stays for works with none; set on a work that has
+  routes, it is a warning and does not sound.
+
+### A stereo file meant for one speaker (Mat)
+Students hand in stereo or dual-mono files for one speaker of an array. A
+two-channel source set to automatic is read like this:
+1. One channel silent (60 dB or more below the other): one output, the live channel.
+2. Left and right the same (L−R at or below −40 dB of the signal): one output, left.
+3. Otherwise it is real stereo: outputs N and N+1 if N+1 is free. If another
+   source has N+1, one output, left and right summed at half level, with a note.
+   A file directly after one summed this way is summed too: it is the last speaker
+   of the same array, and the free output after it must not take its right channel.
+
+The −40 dB rule is a best guess and can be wrong, so **every decision shows in
+the table with its reason, and every route has a manual choice**: Automatic,
+Pair, Sum to one, Left, Right. Measured (`proofs/audio-decode-probe.swift`):
+dual mono reads −200 dB through WAV, MP3 and Apple AAC, −62 dB with independent
+dither, −44 dB through ffmpeg AAC on music-like material, but −13 dB through
+ffmpeg AAC on pure noise, which is then misread as stereo; the closest real stereo
+tested reads −39 dB.
+A source with more than two channels takes that many outputs in order; Sum, Left
+and Right still give one.
+
+### The bake
+- Per Mac, per work, in the background, into `~/Library/Caches/tableauX/sound/`.
+  It is derived data: named by a hash of the routes and each source's path, size
+  and modification date, rebuilt when any of those change, never copied by Collect
+  or Kits, and safe to delete. Present is blocked until it is ready.
+- A WAV: 24-bit, discrete channel layout, at least 2 channels, at the highest
+  source sample rate; other sources are resampled. **Never CAF:** AVPlayer plays
+  a CAF in complete silence with no error (`proofs/audio-format-probe.swift`).
+- Length: the longest source. A shorter source pads with silence, or on a work
+  set to `shorter: loop` repeats on its own length, and the bake then runs at
+  least the work's length so loops stay with their pictures.
+- Over 4 GB (a WAV's limit; about 62 minutes at 8 channels, 29 at 16) the bake
+  stops with a message. Two sources on one output block Present. Source lengths
+  differing by over 1 frame (1/30 s) warn, as § Sync does.
+
+### Output device
+A setting per Mac, like the mode (the show travels, the interface doesn't). First
+match: the device chosen in setup if connected; the default output if it has
+enough outputs; the only non-virtual device with enough. Otherwise Present is
+blocked and says how many outputs are needed; a player reports this to the
+conductor as it does a missing file. Preview uses the same device if it has enough
+outputs, and otherwise is silent with a note, since Preview must work on a laptop.
+
+### Playing
+- One more `AVPlayer` per work with no layer, built by the same `build`, laid out
+  by the same `ItemLayout`, started by the same `setRate(atHostTime:)`, on
+  `audioOutputDeviceUniqueID`. A work with no routes builds nothing new.
+- A work's length counts its sound.
+- The drift check treats it as a panel: a resync is a seek, so it is an audible
+  jump, under the same `tolerance` and `grace`.
+- **Limit:** channels on one interface are sample-locked; between Macs only
+  `sync.tolerance` holds (T12: 3 frames, 100 ms by default). An array that must be
+  phase-coherent belongs on one interface. Stereo per screen across Macs is
+  expected to work when each pair is its own sound. Not yet measured.
+
+### Targets
+| # | Target | How it is checked |
+|---|--------|-------------------|
+| T19 | Each source reaches only its own outputs; crosstalk below −60 dB | `AudioBakeTests` (the file); `AudioLoopbackTests` (a real bake through AVPlayer, virtual device) |
+| T20 | Outputs of one Mac are 0 samples apart | `AudioLoopbackTests` (0 samples, virtual device) |
+| T21 | Loops and repeats are sample-exact | `proofs/audio-bake-pipeline-probe.swift` (exact, virtual device) |
+| T22 | A video's sound stays with its picture: decoded sound lands at its true time | `AudioBakeTests`; `proofs/audio-decode-probe.swift` (0 offset: AAC and PCM, mp4 and mov, 44.1 and 48 kHz). Muxed vs baked playback on a real interface: lab |
+| T23 | Sound stays within `sync.tolerance` of show time for 8 h on the real interface | **Lab, not yet run:** `AudioLoopbackTests` on the Behringer with a cable (the test's header has the command). On the virtual device it reads 0.00 ppm, so that device can't test this |
+
+### Riskiest assumption, and its cheapest test
+That AVPlayer holds audio to the host clock on real hardware. A hardware device
+runs on its own crystal (this Mac's speakers: +8.67 ppm, a frame every 64 min,
+250 ms over 8 h, `proofs/audio-clock-probe.swift`). The virtual device can't show
+this, and the drift check reads the player's timebase, so it may not notice either.
+Cheapest test: a cable from a Behringer output to one of its inputs, clicks every
+second for 30 minutes, arrival against schedule. Bounded meanwhile: each work
+builds a new player, so a 10-minute work could gain about 5 ms; only long "until
+moved on" loops build up, and those could re-sync at the loop point.
+
 ## API Contracts (PlayerCore library)
 
 ```
@@ -862,6 +984,16 @@ Show.machineIndex(named: String) -> Int?                                // § Sh
 ```
 (Playlist API, v4: see the API list under § v3 › Clock, with the other later stages.)
 
+```
+AudioRouting.plan(routes:facts:) -> Plan {feeds, outputs, sampleRate, length, lines, problems, warnings}  // v5
+AudioRouting.classify(left:right:difference:) -> StereoKind             // v5: § A stereo file meant for one speaker
+AudioScan.sounds(_:) / .own(_:machine:label:) / .routes(existing:folder:names:)  // v5
+AudioOutputs.pick(devices:chosen:defaultUID:needed:) -> Device?         // v5: § Output device
+AudioBake.analyse(_:) async throws -> AudioFacts                        // v5: reads the file; no playback
+AudioBake.bake(plan:sources:to:minimumLength:looping:) async throws     // v5: writes the WAV
+SharedShow.setAudio(_:machine:work:routes:) -> Show                     // v5
+```
+
 ## Verification
 
 ```
@@ -872,7 +1004,9 @@ Tests: `DisplayOrderTests`, `PlacementTests`, `SyncMathTests`, `ShowFileTests`,
 `NetworkClockTests`, `ClockReplayTests` (the real Wi-Fi recording),
 `FolderScanTests`, `PlaylistMergeTests`, `TimelineTests`, `ItemLayoutTests`,
 `CollectTests`, `FolderImportTests`, `FillTests`, `LinkFramingTests`,
-`SharedShowTests`, `ShowFolderTests`, `ScreenNumberTests`, `PreviewLayoutTests` (v4).
+`SharedShowTests`, `ShowFolderTests`, `ScreenNumberTests`, `PreviewLayoutTests` (v4),
+`AudioRoutingTests`, `AudioBakeTests`, `AudioLoopbackTests` (v5; the last skipped unless a device is named).
 Probes: also `proofs/clock-probe.swift` (T10, T11), `proofs/work-switch-probe.swift` (v4 riskiest assumption).
 Probes: `proofs/sync-probe.swift` (T1, T2, T4 on this machine).
+Probes: `proofs/audio-*.swift` (v5: T19–T22 on a virtual device; `make-audio-probe-media.sh` makes their files).
 Lab checklist (T4 on the Mac mini, T6): `docs/LAB-TEST.md`.

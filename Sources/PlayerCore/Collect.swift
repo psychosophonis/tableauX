@@ -52,7 +52,9 @@ public enum Collect {
         var out = works
         var folders = takenFolders
         for (w, work) in works.enumerated() {
-            guard let panels = work.screens[machine] else { continue }
+            let routes = work.routes(on: machine)
+            guard work.screens[machine] != nil || !routes.isEmpty else { continue }
+            let panels = work.screens[machine] ?? []
             let folder = uniqueName(folderName(work.name), taken: folders)
             folders.insert(folder.lowercased())
             // A file shown on two screens of one work is copied once: the
@@ -94,7 +96,31 @@ public enum Collect {
                 guard let file = p.file else { continue }       // black stays black
                 rewritten[i].file = "\(folder)/\(given[resolve(file)]!)"
             }
-            out[w].screens[machine] = rewritten
+            if work.screens[machine] != nil { out[w].screens[machine] = rewritten }
+            // [claude] v5: the Mac's sound files go in the archive's audio/, so it
+            // stays the layout of a media folder.
+            //
+            // The bake isn't copied: it's DERIVED DATA, and archiving it would make a
+            // second copy of the sound that has to agree with the first. Keeping only
+            // the sources leaves ONE SOURCE OF TRUTH, and any Mac can bake it again.
+            //
+            // `givenSound` is a MEMO of source → name, so a file on two routes is
+            // copied once and both routes point at the one copy.
+            var soundNames: Set<String> = []
+            var givenSound: [String: String] = [:]
+            var rewrittenRoutes = routes
+            for (i, r) in routes.enumerated() {
+                guard let file = r.file else { continue }
+                let source = resolve(file)
+                if givenSound[source] == nil {
+                    let name = uniqueName((source as NSString).lastPathComponent, taken: soundNames)
+                    soundNames.insert(name.lowercased())
+                    givenSound[source] = name
+                    copies.append(Copy(source: source, dest: AudioScan.path(folder, name)))
+                }
+                rewrittenRoutes[i].file = AudioScan.path(folder, givenSound[source]!)
+            }
+            if !routes.isEmpty { out[w].setRoutes(rewrittenRoutes, on: machine) }
         }
         return Plan(copies: copies, works: out)
     }
@@ -118,7 +144,10 @@ public enum Collect {
         var out = works
         var takenFolders = Set(folders.map { $0.lowercased() })
         for (w, work) in works.enumerated() {
-            guard let panels = work.screens[machine], panels.contains(where: { $0.file.map { !inside($0) } ?? false }) else { continue }
+            let panels = work.screens[machine] ?? []
+            let routes = work.routes(on: machine)
+            guard panels.contains(where: { $0.file.map { !inside($0) } ?? false })
+                    || routes.contains(where: { $0.file.map { !inside($0) } ?? false }) else { continue }
             // Beside the work's library files if it has any; else its own new folder.
             let relativeParents = Set(panels.compactMap(\.file).filter { !$0.hasPrefix("/") }
                 .map { ($0 as NSString).deletingLastPathComponent }).filter { !$0.isEmpty }
@@ -142,7 +171,22 @@ public enum Collect {
                 }
                 rewritten[i].file = "\(folder)/\(given[f]!)"
             }
-            out[w].screens[machine] = rewritten
+            if work.screens[machine] != nil { out[w].screens[machine] = rewritten }
+            // [claude] v5: linked sound files go to the work's audio/ folder.
+            var soundNames = Set(listing("\(folder)/\(AudioScan.folderName)").map { $0.lowercased() })
+            var givenSound: [String: String] = [:]
+            var rewrittenRoutes = routes
+            for (i, r) in routes.enumerated() {
+                guard let f = r.file, !inside(f) else { continue }
+                if givenSound[f] == nil {
+                    let name = uniqueName((f as NSString).lastPathComponent, taken: soundNames)
+                    soundNames.insert(name.lowercased())
+                    givenSound[f] = name
+                    copies.append(Copy(source: f, dest: AudioScan.path(folder, name)))
+                }
+                rewrittenRoutes[i].file = AudioScan.path(folder, givenSound[f]!)
+            }
+            if !routes.isEmpty { out[w].setRoutes(rewrittenRoutes, on: machine) }
         }
         return Plan(copies: copies, works: out)
     }
@@ -198,7 +242,10 @@ public enum Kits {
         for m in show.machines where m.screenCount > 0 || m.name == conductor {
             var seen: Set<String> = [], copies: [Collect.Copy] = [], linked: [String] = []
             for work in show.works {
-                for f in (work.screens[m.name] ?? []).prefix(m.screenCount).compactMap(\.file) where seen.insert(f).inserted {
+                // [claude] v5: the Mac's sound files travel at their library
+                // paths too, so its per-Mac subfolder still matches there.
+                let files = (work.screens[m.name] ?? []).prefix(m.screenCount).compactMap(\.file) + work.routes(on: m.name).compactMap(\.file)
+                for f in files where seen.insert(f).inserted {
                     if f.hasPrefix("/") { linked.append(f) } else { copies.append(Collect.Copy(source: resolve(f), dest: f)) }
                 }
             }
