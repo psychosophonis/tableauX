@@ -304,14 +304,57 @@ final class AppModel: ObservableObject {
         soundRequest(machine: m, work: w).map(sound.state)
     }
 
-    /// The most outputs any work needs on this Mac.
+    /// Work `w` folded to stereo (§ Stereo fold-down): every Mac's sound for a preview,
+    /// as the preview shows every Mac's screens, or just this Mac's for Present.
+    private func stereoRequest(work w: Int, everyMac: Bool) -> StereoRequest? {
+        guard let me = machineName else { return nil }
+        let machines = show.machines.filter { everyMac || $0.name == me }
+        let found = machines.compactMap { m in soundRequest(machine: m.name, work: w).map { (m, $0) } }
+        return found.isEmpty ? nil : StereoRequest(parts: found.map(\.1), pans: found.map { pair in { pair.0.pan(of: $0) } })
+    }
+
+    /// What this Mac would play for work `w`, as Listen is set.
+    func playState(work w: Int, everyMac: Bool = false) -> SoundState? {
+        guard let me = machineName else { return nil }
+        if sound.listenStereo { return stereoRequest(work: w, everyMac: everyMac).map(sound.state) }
+        return soundState(machine: me, work: w)
+    }
+
+    /// Whether this Mac has any sound routes at all.
+    private var hasAnyRoutes: Bool { show.works.indices.contains(where: hasRoutes) }
+
+    /// This Mac would play its sound folded to stereo.
+    var foldsToStereo: Bool { sound.listenStereo && hasAnyRoutes }
+
+    /// The most outputs any work needs on this Mac. Fold-down always needs two.
     private var outputsNeeded: Int {
         guard let me = machineName else { return 0 }
+        if sound.listenStereo { return hasAnyRoutes ? 2 : 0 }
         return show.works.indices.compactMap { soundState(machine: me, work: $0)?.plan.outputs }.max() ?? 0
     }
 
     /// The device this Mac's sound would play on.
     var soundDevice: AudioOutputs.Device? { sound.device(needed: max(outputsNeeded, 1)) }
+
+    /// The outputs a Mac's sound uses in the selected work, for the pan controls.
+    func outputsInUse(on m: String) -> [Int] {
+        let fromPlan = soundState(machine: m, work: selectedWork)?.plan.feeds.map(\.output) ?? []
+        let used = fromPlan.isEmpty ? routes(on: m).map(\.output).filter { $0 > 0 } : fromPlan
+        return Array(Set(used)).sorted()
+    }
+
+    func pan(of output: Int, on m: String) -> Double {
+        show.machines.first { $0.name == m }?.pan(of: output) ?? 0
+    }
+
+    /// A person's edit, told to the conductor on a player, as `setRoutes` is.
+    func setPan(_ pan: Double, of output: Int, on m: String) {
+        guard let i = show.machines.firstIndex(where: { $0.name == m }) else { return }
+        show.machines[i].setPan(pan, of: output)
+        if mode == .player, linkUp {
+            linkClient?.send(.setPans(machine: m, pans: show.machines[i].pans ?? [:]))
+        }
+    }
 
     /// Measures what's here and bakes what's missing. Not during a show: nothing
     /// should compete with the players for the disk.
@@ -319,21 +362,26 @@ final class AppModel: ObservableObject {
         guard !isPlaying else { return }
         sound.refreshDevices()
         var requests: [SoundRequest] = []
+        var stereo: [StereoRequest] = []
         for w in show.works.indices {
             for m in show.machines.map(\.name) {
                 if let r = soundRequest(machine: m, work: w) { requests.append(r) }
             }
+            guard sound.listenStereo else { continue }
+            // Present's version, and the preview's if other Macs add to it. When they
+            // don't, the two have the same name, so there's only one bake.
+            if let own = stereoRequest(work: w, everyMac: false) { stereo.append(own) }
+            if mode != .player, let all = stereoRequest(work: w, everyMac: true) { stereo.append(all) }
         }
-        sound.refresh(requests)
+        sound.refresh(requests, stereo: stereo)
     }
 
     /// What about this Mac's sound stops it presenting. A player sends these to
     /// the conductor with its missing files, so the composer sees them too.
     private func soundProblems() -> [String] {
-        guard let me = machineName else { return [] }
         var out: [String] = []
         for (w, work) in show.works.enumerated() {
-            guard let s = soundState(machine: me, work: w) else { continue }
+            guard let s = playState(work: w) else { continue }
             out += s.plan.problems.map { "\(work.name), sound: \($0)" }
             switch s.status {
             case .reading: out.append("\(work.name): still reading the sound files…")
@@ -345,29 +393,30 @@ final class AppModel: ObservableObject {
         let needed = outputsNeeded
         if needed > 0 {
             if let d = soundDevice {
-                if d.outputs < needed { out.append("Sound needs \(needed) outputs, and \(d.name) has \(d.outputs).") }
+                if d.outputs < needed { out.append("Sound needs \(needed) outputs, and \(d.name) has \(d.outputs). To check it here, set Listen to Stereo fold-down.") }
             } else {
-                out.append("Sound needs \(needed) outputs, and tableauX can't tell which interface to use: choose one under Sound.")
+                out.append("Sound needs \(needed) outputs, and tableauX can't tell which interface to use: choose one under Sound, or set Listen to Stereo fold-down.")
             }
         }
         return out
     }
 
     /// Is any work's sound on this Mac still being measured or baked?
-    private var soundStillPreparing: Bool {
-        guard let me = machineName else { return false }
-        return show.works.indices.contains { w in
-            let status = soundState(machine: me, work: w)?.status
+    private func soundStillPreparing(everyMac: Bool = false) -> Bool {
+        show.works.indices.contains { w in
+            let status = playState(work: w, everyMac: everyMac)?.status
             return status == .reading || status == .baking
         }
     }
 
     /// Notes about this Mac's sound that don't stop the show.
     private func soundWarnings() -> [String] {
-        guard let me = machineName else { return [] }
         var out: [String] = []
+        if sound.listenStereo, hasAnyRoutes {
+            out.append("Sound is folded to stereo on this Mac: set Listen to Full outputs for the array.")
+        }
         for (w, work) in show.works.enumerated() {
-            guard let s = soundState(machine: me, work: w) else { continue }
+            guard let s = playState(work: w) else { continue }
             out += s.plan.warnings.map { "\(work.name), sound: \($0)" }
             if panels(of: w).contains(where: \.audio) {
                 out.append("\(work.name): a screen has Audio on, but this work has sound routes, so only those play. Send the screen's video to an output under Sound.")
@@ -383,8 +432,8 @@ final class AppModel: ObservableObject {
     }
 
     /// The bake to play for work `w`, if it's ready and the device can carry it.
-    private func soundPart(of w: Int) -> SoundPart? {
-        guard let me = machineName, let s = soundState(machine: me, work: w), s.status == .ready,
+    private func soundPart(of w: Int, everyMac: Bool = false) -> SoundPart? {
+        guard let s = playState(work: w, everyMac: everyMac), s.status == .ready,
               let d = soundDevice, d.outputs >= s.plan.outputs else { return nil }
         let looping = show.works[w].shorter == .loop
         return SoundPart(file: s.file.path, duration: max(s.plan.length, looping ? length(of: w) : 0), device: d.uid)
@@ -755,10 +804,19 @@ final class AppModel: ObservableObject {
         }
         // [claude] P4d: only the unsaved all-works show gains works here; a
         // saved show is curated, and new folders wait in the library pool.
-        let label = show.machines.first { $0.name == name }?.label
-        let merged = PlaylistMerge.merge(show.works, with: [Inventory(machine: name, displays: designDisplays, folders: inventory, audio: sounds)],
-                                         firstScreens: [name: firstScreen], addingNewWorks: autoShow,
-                                         labels: label.map { [name: $0] } ?? [:])
+        var inventories = [Inventory(machine: name, displays: designDisplays, folders: inventory, audio: sounds)]
+        // [claude] v5, composing ahead: a Mac that hasn't reported gets its sound from
+        // its own subfolder of this library. Once it reports, its own report counts.
+        for m in show.machines where m.name != name && reported[m.name] == nil {
+            let theirs = sounds.compactMapValues { files -> [InventoryFile]? in
+                let names = Set(AudioScan.subfolderOnly(files.map(\.name), machine: m.name, label: m.label))
+                return names.isEmpty ? nil : files.filter { names.contains($0.name) }
+            }
+            if !theirs.isEmpty { inventories.append(Inventory(machine: m.name, displays: m.displays, folders: [:], audio: theirs)) }
+        }
+        let labels = Dictionary(show.machines.compactMap { m in m.label.map { (m.name, $0) } }, uniquingKeysWith: { a, _ in a })
+        let merged = PlaylistMerge.merge(show.works, with: inventories, firstScreens: [name: firstScreen],
+                                         addingNewWorks: autoShow, labels: labels)
         // [claude] Only assign when something changed: rescans run every few
         // seconds, and every assignment would otherwise trigger an autosave.
         if merged != show.works { show.works = merged }
@@ -1327,6 +1385,8 @@ final class AppModel: ObservableObject {
         case .setAudio(let machine, let work, let routes):
             NSLog("link: %@ set %d sound route(s) on %@", machine, routes.count, work)
             show = SharedShow.setAudio(show, machine: machine, work: work, routes: routes)
+        case .setPans(let machine, let pans):
+            show = SharedShow.setPans(show, machine: machine, pans: pans)
         case .show:
             break                            // only a conductor sends these
         }
@@ -1594,7 +1654,7 @@ final class AppModel: ObservableObject {
             // starts at launch would play its whole run without that file.
             if wantsPresent || wantsPreview {
                 rescan()
-                while !startupSkipped, soundStillPreparing {
+                while !startupSkipped, soundStillPreparing(everyMac: wantsPreview) {
                     startupStatus = "Preparing the sound…"
                     refreshSound()
                     try? await Task.sleep(for: .milliseconds(500))
@@ -2170,11 +2230,12 @@ final class AppModel: ObservableObject {
             // [claude] v5: the preview only sounds if this Mac can carry the work
             // (soundPart checks); a laptop previewing an array stays silent, and
             // says so below, since Preview must not depend on the interface.
+            let part = soundPart(of: w, everyMac: !ownOnly)
             return WorkPart(name: work.name, panels: ps, durations: durations, length: len,
-                            repeat: work.repeat, shorter: work.shorter, routed: hasRoutes(w), sound: soundPart(of: w))
+                            repeat: work.repeat, shorter: work.shorter, routed: hasRoutes(w) || part != nil, sound: part)
         }
         if parts.contains(where: { $0.routed && $0.sound == nil }) {
-            libraryNote = "Preview is silent for works whose sound isn't ready or needs more outputs than this Mac has."
+            libraryNote = "Preview is silent for works whose sound isn't ready or needs more outputs than this Mac has. To check it here, set Listen to Stereo fold-down."
         }
         guard s != nil || parts.contains(where: { $0.length > 0 }) else {
             lastError = "Nothing to preview: none of this show's files are on this Mac."

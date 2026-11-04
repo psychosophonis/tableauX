@@ -171,6 +171,14 @@ tolerance. Preview stays silent if this Mac has too few outputs.
 To compose on one machine holding every Mac's files, use `audio/<Mac name or
 label>/` for each other Mac. Kits copy them across.
 
+**Checking a surround work on stereo:** set **Listen** to **Stereo fold-down**. The
+work plays folded to outputs 1 and 2, and nothing about it changes, so setting Listen
+back to **Full outputs** gives you the array again. Sliders set where each output sits
+in the fold-down: odd outputs start left and even right, and you only set them once,
+because they apply to every work. Preview includes every Mac's sound whose files are on
+this Mac; Present plays only this Mac's. It's a check of content, balance and timing:
+phase and localisation can only be judged in the array itself.
+
 **Check Interface before pressing Present or Preview.** Automatic uses this Mac's
 default output if it has enough outputs, so if that's your monitors, the work plays
 on your monitors at full level.

@@ -58,10 +58,64 @@ public enum AudioRouting {
         public var output: Int        // from 1
         public var source: Int        // index into the routes
         public var channels: [Int]    // from 0; more than one = summed at equal level
+        public var gain: Double       // 1 on a full bake; a fold-down's pan otherwise
 
-        public init(output: Int, source: Int, channels: [Int]) {
-            self.output = output; self.source = source; self.channels = channels
+        public init(output: Int, source: Int, channels: [Int], gain: Double = 1) {
+            self.output = output; self.source = source; self.channels = channels; self.gain = gain
         }
+    }
+
+    /// One Mac's sound, going into a fold-down. `sources` is how many routes the plan
+    /// was made from, which places the next Mac's sources after these ones.
+    public struct FoldPart {
+        public var plan: Plan
+        public var sources: Int
+        public var pan: (Int) -> Double
+
+        public init(plan: Plan, sources: Int, pan: @escaping (Int) -> Double) {
+            self.plan = plan; self.sources = sources; self.pan = pan
+        }
+    }
+
+    /// A pan position (−1 left to +1 right) as a gain for each side.
+    ///
+    /// An EQUAL-POWER PAN LAW: left = cos θ, right = sin θ. Since cos² + sin² = 1, the
+    /// total power is the same at every position. The obvious linear crossfade (each
+    /// side at half at the centre) makes a sound 3 dB quieter in the middle, because
+    /// perceived level follows power, not amplitude. That would mislead here: a centre
+    /// speaker would seem quiet against the sides, and balance is what this checks.
+    public static func panGains(_ pan: Double) -> (left: Double, right: Double) {
+        let theta = (min(max(pan, -1), 1) + 1) * .pi / 4
+        return (cos(theta), sin(theta))
+    }
+
+    /// Several Macs' plans mixed down to outputs 1 and 2 (§ Stereo fold-down).
+    ///
+    /// It works from the plans' feeds rather than their routes, so every decision
+    /// already made and shown to the person, such as a dual-mono file taking one
+    /// speaker, holds in the fold-down too. It folds what the array would play, which
+    /// is the point of checking it.
+    public static func fold(_ parts: [FoldPart]) -> Plan {
+        var out = Plan()
+        var offset = 0
+        for part in parts {
+            for feed in part.plan.feeds {
+                let (left, right) = panGains(part.pan(feed.output))
+                // A hard-panned speaker's other side is about 6e-17, not 0. Skipping it
+                // saves a pointless mix pass and keeps the plan readable in tests.
+                if left > 1e-6 { out.feeds.append(Feed(output: 1, source: offset + feed.source, channels: feed.channels, gain: left)) }
+                if right > 1e-6 { out.feeds.append(Feed(output: 2, source: offset + feed.source, channels: feed.channels, gain: right)) }
+            }
+            if !part.plan.feeds.isEmpty {
+                out.sampleRate = max(out.sampleRate, part.plan.sampleRate)
+                out.length = max(out.length, part.plan.length)
+            }
+            out.problems += part.plan.problems
+            out.warnings += part.plan.warnings
+            offset += part.sources
+        }
+        out.outputs = out.feeds.isEmpty ? 0 : 2
+        return out
     }
 
     public struct Plan: Equatable {
@@ -258,6 +312,14 @@ public enum AudioScan {
         let mine = [machine, label].compactMap { $0 }.map { $0 + "/" }
         let inSubfolder = names.filter { n in mine.contains { n.hasPrefix($0) } }
         return sounds(inSubfolder.isEmpty ? names.filter { !$0.contains("/") } : inSubfolder)
+    }
+
+    /// The files in a Mac's own subfolder of `audio/`. For a Mac composed ahead, listed
+    /// from this Mac's library: unlike `own`, it never falls back to the loose files,
+    /// because those are this Mac's, and would otherwise be routed on two Macs at once.
+    public static func subfolderOnly(_ names: [String], machine: String, label: String? = nil) -> [String] {
+        let theirs = [machine, label].compactMap { $0 }.map { $0 + "/" }
+        return names.filter { n in theirs.contains { n.hasPrefix($0) } }
     }
 
     /// The routes for one Mac and one work, with any new files added. Routes

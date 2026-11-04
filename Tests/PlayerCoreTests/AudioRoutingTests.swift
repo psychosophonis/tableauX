@@ -261,6 +261,89 @@ final class AudioRoutingTests: XCTestCase {
         XCTAssertEqual(b?.linked, ["/Volumes/U/z.wav"])
     }
 
+    // MARK: Stereo fold-down
+
+    func testEqualPowerPan() {
+        for pan in stride(from: -1.0, through: 1.0, by: 0.25) {
+            let (l, r) = AudioRouting.panGains(pan)
+            XCTAssertEqual(l * l + r * r, 1, accuracy: 1e-9, "power is the same at \(pan)")
+        }
+        XCTAssertEqual(AudioRouting.panGains(-1).left, 1, accuracy: 1e-9)
+        XCTAssertEqual(AudioRouting.panGains(-1).right, 0, accuracy: 1e-9)
+        XCTAssertEqual(AudioRouting.panGains(1).right, 1, accuracy: 1e-9)
+        XCTAssertEqual(AudioRouting.panGains(0).left, 0.5.squareRoot(), accuracy: 1e-9)
+    }
+
+    func testOddOutputsStartLeftAndEvenRight() {
+        let m = Machine(name: "A")
+        XCTAssertEqual(m.pan(of: 1), -1)
+        XCTAssertEqual(m.pan(of: 2), 1)
+        XCTAssertEqual(m.pan(of: 7), -1)
+    }
+
+    func testPansSetAndUnsetAndTheDefaultIsNotStored() throws {
+        var m = Machine(name: "A")
+        m.setPan(0.25, of: 3)
+        XCTAssertEqual(m.pan(of: 3), 0.25)
+        m.setPan(5, of: 4)
+        XCTAssertEqual(m.pan(of: 4), 1, "clamped, and 1 is output 4's default")
+        m.setPan(-1, of: 3)
+        XCTAssertNil(m.pans, "back at the default, so nothing is stored")
+    }
+
+    func testPansRoundTripAndOldFilesOpen() throws {
+        var m = Machine(name: "A", displays: 1)
+        m.setPan(-0.5, of: 2)
+        let show = Show(machines: [m])
+        XCTAssertEqual(try ShowFile.decode(try ShowFile.encode(show)), show)
+        let plain = String(decoding: try ShowFile.encode(Show(machines: [Machine(name: "A", displays: 1)])), as: UTF8.self)
+        XCTAssertFalse(plain.contains("pans"))
+    }
+
+    func testAFoldKeepsTheSpeakerDecisionsAndPans() {
+        let plan = AudioRouting.plan(routes: [route(1), route(2), route(7)], facts: [stereo(.dual), mono, stereo(.different)])
+        let fold = AudioRouting.fold([.init(plan: plan, sources: 3, pan: { $0 == 8 ? 0 : Machine(name: "A").pan(of: $0) })])
+        XCTAssertEqual(fold.outputs, 2)
+        XCTAssertEqual(fold.feeds.filter { $0.output == 1 }.map(\.source), [0, 2, 2], "dual mono once, stereo 7 hard left, 8 centred")
+        XCTAssertEqual(fold.feeds.filter { $0.output == 2 }.map(\.source), [1, 2])
+        XCTAssertEqual(fold.feeds.first { $0.output == 2 && $0.source == 2 }?.gain ?? 0, 0.5.squareRoot(), accuracy: 1e-9)
+    }
+
+    /// Mat's array across Macs, heard from one: output 1 on each is its own speaker.
+    func testAFoldAcrossMacsNumbersSourcesInTurnAndUsesEachMacsPans() {
+        let a = AudioRouting.plan(routes: [route(1), route(2)], facts: [mono, mono])
+        let b = AudioRouting.plan(routes: [route(1)], facts: [AudioFacts(channels: 1, sampleRate: 96000, duration: 20)])
+        let fold = AudioRouting.fold([.init(plan: a, sources: 2, pan: { _ in -1 }), .init(plan: b, sources: 1, pan: { _ in 1 })])
+        XCTAssertEqual(fold.feeds.filter { $0.output == 1 }.map(\.source), [0, 1])
+        XCTAssertEqual(fold.feeds.filter { $0.output == 2 }.map(\.source), [2])
+        XCTAssertEqual(fold.sampleRate, 96000)
+        XCTAssertEqual(fold.length, 20)
+    }
+
+    func testAFoldOfNothingNeedsNoOutputs() {
+        XCTAssertEqual(AudioRouting.fold([]).outputs, 0)
+    }
+
+    func testAMacComposedAheadGetsItsSubfolderAndNeverTheLooseFiles() throws {
+        let names = ["here_1.wav", "Gallery 2/a_3.wav", "Gallery 3/b_1.wav"]
+        XCTAssertEqual(AudioScan.subfolderOnly(names, machine: "Gallery 2"), ["Gallery 2/a_3.wav"])
+        XCTAssertEqual(AudioScan.subfolderOnly(names, machine: "Mini", label: "Gallery 3"), ["Gallery 3/b_1.wav"])
+        XCTAssertEqual(AudioScan.subfolderOnly(names, machine: "Elsewhere"), [])
+
+        let files = AudioScan.subfolderOnly(names, machine: "Gallery 2").map { InventoryFile(name: $0, duration: 0) }
+        let works = PlaylistMerge.merge([Work(name: "W")], with: [Inventory(machine: "Gallery 2", displays: 1, folders: [:], audio: ["W": files])])
+        XCTAssertEqual(works[0].routes(on: "Gallery 2"), [AudioRoute(file: "W/audio/Gallery 2/a_3.wav", output: 3)])
+    }
+
+    func testAPlayersPansAreRecorded() throws {
+        let show = Show(machines: [Machine(name: "P", displays: 1)])
+        XCTAssertEqual(SharedShow.setPans(show, machine: "P", pans: [3: 0.5]).machines[0].pans, [3: 0.5])
+        XCTAssertEqual(SharedShow.setPans(show, machine: "Q", pans: [3: 0.5]), show)
+        var reader = LinkFraming.Reader()
+        let m = LinkMessage.setPans(machine: "P", pans: [3: 0.5])
+        XCTAssertEqual(try reader.feed(LinkFraming.frame(m)), [m])
+    }
+
     // MARK: Device
 
     private let speakers = AudioOutputs.Device(uid: "s", name: "Speakers", outputs: 2)

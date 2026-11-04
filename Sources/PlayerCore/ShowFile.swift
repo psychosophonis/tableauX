@@ -35,13 +35,35 @@ public struct Machine: Codable, Equatable {
     /// [claude] This Mac takes part with NO screens of its own (a laptop that
     /// composes and conducts, Mat 2026-10-22). Optional in the file.
     public var noScreens: Bool?
+    /// [claude] v5: where each output sits in a stereo fold-down, −1 left to +1 right,
+    /// only where a person moved it from the default (§ Stereo fold-down). On the Mac,
+    /// not the work, because the speakers stay put between works. Optional in the file.
+    public var pans: [Int: Double]?
 
-    public init(name: String, displays: Int = 0, label: String? = nil, noScreens: Bool? = nil) {
-        self.name = name; self.displays = displays; self.label = label; self.noScreens = noScreens
+    public init(name: String, displays: Int = 0, label: String? = nil, noScreens: Bool? = nil, pans: [Int: Double]? = nil) {
+        self.name = name; self.displays = displays; self.label = label; self.noScreens = noScreens; self.pans = pans
     }
 
     /// What setup and the preview call this Mac.
     public var displayName: String { label ?? name }
+
+    /// An output's pan. By default odd outputs go left and even go right, the usual
+    /// numbering of stereo pairs, so stereo per screen needs no setup.
+    public func pan(of output: Int) -> Double {
+        pans?[output] ?? Self.defaultPan(of: output)
+    }
+
+    /// Sets an output's pan. A default isn't stored, the same CANONICAL FORM as
+    /// `Work.setRoutes`: "untouched" has one spelling, so a show compares equal to
+    /// itself and writes the same file.
+    public mutating func setPan(_ pan: Double, of output: Int) {
+        var all = pans ?? [:]
+        let value = min(max(pan, -1), 1)
+        all[output] = value == Self.defaultPan(of: output) ? nil : value
+        pans = all.isEmpty ? nil : all
+    }
+
+    private static func defaultPan(of output: Int) -> Double { output % 2 == 1 ? -1 : 1 }
 
     /// How many screens it has in the tableau: 0 for a Mac that only
     /// conducts. Everything that numbers or lays out screens uses this.

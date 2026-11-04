@@ -14,7 +14,21 @@ struct SoundPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Sound").font(.headline)
+            HStack(spacing: 12) {
+                Text("Sound").font(.headline)
+                // A switch, not automatic: an interface's output count doesn't say
+                // what's connected (§ Stereo fold-down).
+                Picker("Listen", selection: $sound.listenStereo) {
+                    Text("Full outputs").tag(false)
+                    Text("Stereo fold-down").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .help("Stereo fold-down checks a multichannel work on two speakers, without changing it. On this Mac only.")
+                if sound.listenStereo {
+                    Text("Folded to stereo, on outputs 1–2. The work itself is unchanged.").font(.caption).foregroundStyle(.orange)
+                }
+            }
             ForEach(model.show.machines, id: \.name) { m in
                 if m.name == model.machineName || !model.routes(on: m.name).isEmpty {
                     MacSound(model: model, sound: sound, machine: m.name)
@@ -50,9 +64,12 @@ private struct MacSound: View {
             // Acceptable here because a row holds no state of its own (every value
             // is read from the show), so there's nothing to inherit.
             ForEach(routes.indices, id: \.self) { row(at: $0) }
+            if sound.listenStereo, !routes.isEmpty { pans }
             if let state, isThisMac {
                 ForEach(state.plan.problems + state.plan.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
-                switch state.status {
+                // What will actually play, not the full bake: on fold-down that bake
+                // is deliberately never made, so its status would never clear.
+                switch model.playState(work: model.selectedWork)?.status ?? state.status {
                 case .baking: Text("Preparing the sound…").font(.caption).foregroundStyle(.secondary)
                 case .failed(let why): Text(why).font(.caption).foregroundStyle(.red)
                 default: EmptyView()
@@ -60,6 +77,24 @@ private struct MacSound: View {
             }
         }
         .disabled(!model.canEditScreens(of: machine))
+    }
+
+    /// Where each output sits in the fold-down. These belong to the Mac, so moving one
+    /// here moves it for every work in the show.
+    private var pans: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("In the fold-down, for every work:").font(.caption).foregroundStyle(.secondary)
+            ForEach(model.outputsInUse(on: machine), id: \.self) { output in
+                HStack(spacing: 8) {
+                    Text("Output \(output)").font(.caption).frame(width: 60, alignment: .leading)
+                    Text("L").font(.caption2).foregroundStyle(.secondary)
+                    Slider(value: Binding(get: { model.pan(of: output, on: machine) },
+                                          set: { model.setPan($0, of: output, on: machine) }), in: -1...1)
+                        .frame(width: 180)
+                    Text("R").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private func row(at i: Int) -> some View {

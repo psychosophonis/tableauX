@@ -35,6 +35,8 @@ public enum LinkMessage: Codable, Equatable, @unchecked Sendable {
     case setScreen(machine: String, work: String, index: Int, panel: PanelConfig)
     /// [claude] v5: the same for a player's sound routes in one work.
     case setAudio(machine: String, work: String, routes: [AudioRoute])
+    /// [claude] v5: the same for a player's fold-down pans.
+    case setPans(machine: String, pans: [Int: Double])
 }
 
 /// Cutting messages out of a TCP byte stream.
@@ -196,6 +198,14 @@ public enum SharedShow {
               let w = show.works.firstIndex(where: { $0.name == work }) else { return show }
         var s = show
         s.works[w].setRoutes(routes, on: machine)
+        return s
+    }
+
+    /// [claude] v5: the show with one Mac's fold-down pans set (LinkMessage.setPans).
+    public static func setPans(_ show: Show, machine: String, pans: [Int: Double]) -> Show {
+        guard let i = show.machines.firstIndex(where: { $0.name == machine }) else { return show }
+        var s = show
+        s.machines[i].pans = pans.isEmpty ? nil : pans
         return s
     }
 

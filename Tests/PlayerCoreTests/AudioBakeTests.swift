@@ -183,6 +183,51 @@ final class AudioBakeTests: XCTestCase {
         XCTAssertEqual(Double(at) / 48000, 0.9995, accuracy: 0.002, "the click window opens 0.5 ms before 1 s")
     }
 
+    // MARK: Stereo fold-down (§ Stereo fold-down; T24)
+
+    private func foldPlan(_ pans: [Double], _ sources: [URL]) async throws -> AudioRouting.Plan {
+        var facts: [AudioFacts?] = []
+        for s in sources { facts.append(try await AudioBake.analyse(s)) }
+        let routes = sources.indices.map { AudioRoute(file: "s\($0)", output: $0 + 1) }
+        let plan = AudioRouting.plan(routes: routes, facts: facts)
+        return AudioRouting.fold([.init(plan: plan, sources: routes.count, pan: { pans[$0 - 1] })])
+    }
+
+    func testAFoldDownPutsEachOutputWhereItsPanSays() async throws {
+        let a = try write([tone(440)], "a.wav"), b = try write([tone(620)], "b.wav"), c = try write([tone(880)], "c.wav")
+        let plan = try await foldPlan([-1, 1, 0], [a, b, c])
+        let out = dir.appendingPathComponent("fold.wav")
+        try await AudioBake.bake(plan: plan, sources: [a, b, c], to: out, preventClipping: true)
+        let ch = try read(out).channels
+        XCTAssertEqual(ch.count, 2)
+        // Left holds a + c/√2, right holds b + c/√2, unchanged because nothing clips.
+        let centre = tone(880).map { $0 * Float(0.5.squareRoot()) }
+        XCTAssertLessThan(rms(zip(zip(tone(440), centre), ch[0]).map { $0.0 + $0.1 - $1 }), 1e-5)
+        XCTAssertLessThan(rms(zip(zip(tone(620), centre), ch[1]).map { $0.0 + $0.1 - $1 }), 1e-5)
+    }
+
+    /// Every speaker hard left, at near full scale: the sum would reach 3.6.
+    func testAFoldDownThatWouldClipIsTurnedDownAndKeepsItsBalance() async throws {
+        let loud = [Float](repeating: 0.9, count: 4800), half = [Float](repeating: 0.45, count: 4800)
+        let sources = [try write([loud], "a.wav"), try write([loud], "b.wav"), try write([loud], "c.wav"), try write([half], "d.wav")]
+        let plan = try await foldPlan([-1, -1, -1, 1], sources)
+        let out = dir.appendingPathComponent("fold.wav")
+        try await AudioBake.bake(plan: plan, sources: sources, to: out, preventClipping: true)
+        let ch = try read(out).channels
+        let scale = Float(1 / 2.7)
+        XCTAssertEqual(ch[0][100], 1, accuracy: 1e-4, "the loudest side reaches full scale and no further")
+        XCTAssertEqual(ch[1][100], 0.45 * scale, accuracy: 1e-4, "the other side comes down by the same gain")
+    }
+
+    func testAQuietFoldDownIsNeverTurnedUp() async throws {
+        let quiet = [Float](repeating: 0.01, count: 4800)
+        let source = try write([quiet], "a.wav")
+        let plan = try await foldPlan([-1], [source])
+        let out = dir.appendingPathComponent("fold.wav")
+        try await AudioBake.bake(plan: plan, sources: [source], to: out, preventClipping: true)
+        XCTAssertEqual(try read(out).channels[0][100], 0.01, accuracy: 1e-5)
+    }
+
     func testTooLongForAWAVStopsWithAMessage() async throws {
         var plan = AudioRouting.Plan()
         plan.outputs = 16; plan.sampleRate = 48000; plan.length = 2 * 3600

@@ -952,6 +952,35 @@ outputs, and otherwise is silent with a note, since Preview must work on a lapto
   phase-coherent belongs on one interface. Stereo per screen across Macs is
   expected to work when each pair is its own sound. Not yet measured.
 
+### Stereo fold-down (Mat, 2026-11-05)
+Aim (Mat): "test it on a stereo system then plug in the array and make it work in
+surround... set it up locally before heading to the installation space."
+- **Listen, a switch per Mac:** Full outputs, or Stereo fold-down. [claude] It is a
+  switch, not automatic, because an interface's output count doesn't say what's
+  connected: an Apollo reports 10 outputs with monitors on 1-2. It is stored per Mac,
+  like the interface, so a home setting can't reach the gallery in a show or a kit.
+- **Nothing about the work changes.** Fold-down is a second bake, on outputs 1-2. The
+  routes and the full bake are untouched, so switching back restores the work.
+- **A pan per output (Mat), stored per Mac in the show,** shared by every work, since
+  the speakers stay put between works. No presets: outputs start odd = left, even =
+  right, which already suits stereo per screen; a surround array is set by hand once.
+- [claude] **Pan law:** EQUAL POWER, left = cos θ, right = sin θ, θ = (pan + 1)·π/4.
+- **Level:** [claude] left and right are sums, so they can exceed full scale. The bake
+  measures the mix's peak in a first pass and turns the whole mix down only if it
+  would clip, never up, so the balance between speakers holds.
+- **Which sound:** Preview folds every Mac's sound whose files are on this Mac (Mat),
+  as it shows every Mac's screens. Present folds only this Mac's part. A player
+  following a conductor's preview folds its own part.
+- **It can't be left on by accident:** the status line and the Present button both say
+  so. With Full outputs and too few of them, Present stays blocked and the message
+  points to the switch; Preview stays silent, with a note.
+- **It can't tell you about the room.** Fold-down checks content, balance and timing.
+  Phase and localisation in the array can only be judged in the array.
+- [claude] **Composing ahead, a correction:** routes for a Mac that hasn't reported
+  now come from `audio/<Mac>/` in this library. Until now they only appeared once that
+  Mac reported, despite § Getting sound in. Only its subfolder counts: loose files are
+  this Mac's.
+
 ### Targets
 | # | Target | How it is checked |
 |---|--------|-------------------|
@@ -959,6 +988,7 @@ outputs, and otherwise is silent with a note, since Preview must work on a lapto
 | T20 | Outputs of one Mac are 0 samples apart | `AudioLoopbackTests` (0 samples, virtual device) |
 | T21 | Loops and repeats are sample-exact | `proofs/audio-bake-pipeline-probe.swift` (exact, virtual device) |
 | T22 | A video's sound stays with its picture: decoded sound lands at its true time | `AudioBakeTests`; `proofs/audio-decode-probe.swift` (0 offset: AAC and PCM, mp4 and mov, 44.1 and 48 kHz). Muxed vs baked playback on a real interface: lab |
+| T24 | A fold-down puts each output on its pan, and the mix never clips | `AudioRoutingTests`, `AudioBakeTests` (the file); app run on a virtual device |
 | T23 | Sound stays within `sync.tolerance` of show time for 8 h on the real interface | **Lab, not yet run:** `AudioLoopbackTests` on the Behringer with a cable (the test's header has the command). On the virtual device it reads 0.00 ppm, so that device can't test this |
 
 ### Riskiest assumption, and its cheapest test
@@ -993,6 +1023,9 @@ AudioOutputs.pick(devices:chosen:defaultUID:needed:) -> Device?         // v5: �
 AudioBake.analyse(_:) async throws -> AudioFacts                        // v5: reads the file; no playback
 AudioBake.bake(plan:sources:to:minimumLength:looping:) async throws     // v5: writes the WAV
 SharedShow.setAudio(_:machine:work:routes:) -> Show                     // v5
+AudioRouting.fold(_:) -> Plan ; .panGains(_:) -> (left, right)           // v5: § Stereo fold-down
+Machine.pan(of:) / .setPan(_:of:) ; SharedShow.setPans(_:machine:pans:)  // v5
+AudioScan.subfolderOnly(_:machine:label:)                               // v5: a Mac composed ahead
 ```
 
 ## Verification

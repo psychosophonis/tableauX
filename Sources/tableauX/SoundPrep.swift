@@ -21,6 +21,13 @@ struct SoundRequest {
     var bakeHere: Bool
 }
 
+/// A work's stereo fold-down (§ Stereo fold-down): one or more Macs' sound, each Mac's
+/// outputs placed by that Mac's pans.
+struct StereoRequest {
+    var parts: [SoundRequest]
+    var pans: [(Int) -> Double]         // per part
+}
+
 enum SoundStatus: Equatable {
     case none, reading, baking, ready
     case failed(String)
@@ -41,9 +48,15 @@ final class SoundPrep: ObservableObject {
     /// The device chosen by hand, or nil for automatic. Per Mac, like the mode:
     /// the show travels between Macs, the interface doesn't.
     @Published var chosenDevice: String? = UserDefaults.standard.string(forKey: SoundPrep.deviceKey) {
-        didSet { UserDefaults.standard.set(chosenDevice, forKey: Self.deviceKey) }
+        didSet { UserDefaults.standard.set(chosenDevice, forKey: Self.deviceKey); onChange?() }
     }
     private static let deviceKey = "soundDevice"
+    /// Listen: true = this Mac folds every work to stereo. Per Mac and not in the show,
+    /// so a setting made at home can't reach the gallery in a show file or a kit.
+    @Published var listenStereo: Bool = UserDefaults.standard.bool(forKey: SoundPrep.listenKey) {
+        didSet { UserDefaults.standard.set(listenStereo, forKey: Self.listenKey); onChange?() }
+    }
+    private static let listenKey = "soundListenStereo"
 
     /// Called when a job finishes, so the model can recheck what blocks Present.
     var onChange: (() -> Void)?
@@ -56,7 +69,7 @@ final class SoundPrep: ObservableObject {
 
     private enum Job {
         case measure(String)
-        case bake(name: String, plan: AudioRouting.Plan, sources: [URL], to: URL, minimumLength: Double, looping: Bool)
+        case bake(name: String, plan: AudioRouting.Plan, sources: [URL], to: URL, minimumLength: Double, looping: Bool, preventClipping: Bool)
     }
 
     /// `~/Library/Caches`, because a bake is DERIVED DATA: it can always be made
@@ -112,6 +125,42 @@ final class SoundPrep: ObservableObject {
         return SoundState(plan: plan, status: status, file: file)
     }
 
+    /// What a fold-down amounts to right now. Another Mac's files are optional here:
+    /// one that isn't on this Mac is simply left out, as its screen is in the preview.
+    /// One that IS here but not yet measured is waited for, or the first bake would
+    /// quietly lack that Mac's sound.
+    func state(_ r: StereoRequest) -> SoundState {
+        var parts: [AudioRouting.FoldPart] = []
+        var waiting = false
+        var key = ""
+        for (part, pan) in zip(r.parts, r.pans) {
+            let s = state(part)
+            var plan = s.plan
+            if part.bakeHere {
+                if s.status == .reading { waiting = true }
+            } else {
+                plan.problems = []
+                plan.warnings = []
+                let unmeasured = part.paths.compactMap { $0 }.contains {
+                    facts[$0] == nil && unreadable[$0] == nil && FileManager.default.fileExists(atPath: $0)
+                }
+                if unmeasured { waiting = true }
+            }
+            parts.append(.init(plan: plan, sources: part.routes.count, pan: pan))
+            key += name(of: part) + plan.feeds.map { "|\($0.output):\(pan($0.output))" }.joined()
+        }
+        let plan = AudioRouting.fold(parts)
+        let owner = "fold/" + r.parts.map(\.machine).joined(separator: "/") + "/" + (r.parts.first?.work ?? "")
+        let file = Self.folder.appendingPathComponent("\(Self.hash(owner))-\(Self.hash(key)).wav")
+        let status: SoundStatus
+        if !plan.problems.isEmpty { status = .none }
+        else if waiting { status = .reading }
+        else if plan.feeds.isEmpty { status = .none }
+        else if let why = failures[file.lastPathComponent] { status = .failed(why) }
+        else { status = FileManager.default.fileExists(atPath: file.path) ? .ready : .baking }
+        return SoundState(plan: plan, status: status, file: file)
+    }
+
     /// The bake's name: a CONTENT-ADDRESSED cache key, a hash of everything that
     /// decides its contents. Changing a route or replacing a source changes the
     /// name, so a stale bake can't be played; nothing has to remember to clear it.
@@ -140,14 +189,29 @@ final class SoundPrep: ObservableObject {
     /// (§ v3 › Show state). It needs no event for each thing that could change (a
     /// file dropped in the folder, a route edited, the cache emptied), since the next
     /// pass notices all of them, and macOS gives no simple single event for those.
-    func refresh(_ requests: [SoundRequest]) {
+    ///
+    /// On fold-down only the fold-downs are baked, so a home Mac doesn't spend disk on
+    /// a full version it can't hear; the full bake is made when Listen goes back. A
+    /// slider dragged across a pan can't pile up work either: this runs once a second
+    /// and queues only what the show says now, and a finished bake deletes older ones.
+    func refresh(_ requests: [SoundRequest], stereo: [StereoRequest] = []) {
         for path in requests.flatMap({ $0.paths.compactMap { $0 } }) { want(path) }
-        for r in requests where r.bakeHere {
+        if !listenStereo {
+            for r in requests where r.bakeHere {
+                let s = state(r)
+                guard s.status == .baking, !isQueued(s.file.lastPathComponent) else { continue }
+                let sources = r.paths.map { URL(fileURLWithPath: $0 ?? "/dev/null") }
+                queue.append(.bake(name: s.file.lastPathComponent, plan: s.plan, sources: sources, to: s.file,
+                                   minimumLength: r.minimumLength, looping: r.looping, preventClipping: false))
+            }
+        }
+        for r in stereo {
             let s = state(r)
             guard s.status == .baking, !isQueued(s.file.lastPathComponent) else { continue }
-            let sources = r.paths.map { URL(fileURLWithPath: $0 ?? "/dev/null") }
+            let sources = r.parts.flatMap(\.paths).map { URL(fileURLWithPath: $0 ?? "/dev/null") }
             queue.append(.bake(name: s.file.lastPathComponent, plan: s.plan, sources: sources, to: s.file,
-                               minimumLength: r.minimumLength, looping: r.looping))
+                               minimumLength: r.parts.map(\.minimumLength).max() ?? 0,
+                               looping: r.parts.first?.looping ?? false, preventClipping: true))
         }
         runNext()
     }
@@ -167,7 +231,7 @@ final class SoundPrep: ObservableObject {
     }
 
     private func isQueued(_ name: String) -> Bool {
-        queue.contains { if case .bake(let n, _, _, _, _, _) = $0 { return n == name } else { return false } }
+        queue.contains { if case .bake(let n, _, _, _, _, _, _) = $0 { return n == name } else { return false } }
             || bakingNow == name
     }
     private var bakingNow: String?
@@ -183,6 +247,11 @@ final class SoundPrep: ObservableObject {
         guard !running, !queue.isEmpty else { return }
         running = true
         let job = queue.removeFirst()
+        // Marked as running HERE, not inside the Task. The Task starts later, and for
+        // that moment the job is neither queued nor running, so a refresh in the gap
+        // would queue it again: a CHECK-THEN-ACT RACE, even on one thread. It was seen
+        // as a bake running twice, the second overwriting its file during the show.
+        if case .bake(let name, _, _, _, _, _, _) = job { bakingNow = name }
         Task {
             switch job {
             case .measure(let path):
@@ -193,11 +262,11 @@ final class SoundPrep: ObservableObject {
                     NSLog("sound: can't read %@: %@", path, error.localizedDescription)
                 }
                 measuring.remove(path)
-            case .bake(let name, let plan, let sources, let to, let minimumLength, let looping):
-                bakingNow = name
+            case .bake(let name, let plan, let sources, let to, let minimumLength, let looping, let preventClipping):
                 let t0 = Date()
                 do {
-                    try await AudioBake.bake(plan: plan, sources: sources, to: to, minimumLength: minimumLength, looping: looping)
+                    try await AudioBake.bake(plan: plan, sources: sources, to: to, minimumLength: minimumLength,
+                                             looping: looping, preventClipping: preventClipping)
                     Self.deleteOlderVersions(of: name)
                     NSLog("sound: baked %d outputs in %.1f s: %@", plan.outputs, Date().timeIntervalSince(t0), name)
                 } catch {

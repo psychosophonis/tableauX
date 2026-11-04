@@ -144,8 +144,19 @@ public enum AudioBake {
     /// own length (a work with `shorter: loop`) instead of going silent, so its
     /// sound stays with its looping picture. `minimumLength`: run at least this
     /// long, for a looping work longer than its sound.
+    ///
+    /// `preventClipping`, for a fold-down: its outputs are sums of many sources, so
+    /// they can exceed full scale, and a 24-bit file would then clip. This is PEAK
+    /// NORMALISATION, applied only downward, in TWO PASSES: render once to find the
+    /// true peak, then render again with a single gain that brings it to full scale.
+    /// The usual alternative, dividing by the number of sources, is safe without
+    /// measuring, but leaves an 8-channel work 18 dB quieter even when it never comes
+    /// near clipping. A single gain over the whole mix also keeps the balance between
+    /// speakers, which a limiter acting moment by moment wouldn't, and balance is what
+    /// a fold-down is for. The cost is reading every source twice.
     public static func bake(plan: AudioRouting.Plan, sources: [URL], to destination: URL,
-                            minimumLength: Double = 0, looping: Bool = false) async throws {
+                            minimumLength: Double = 0, looping: Bool = false,
+                            preventClipping: Bool = false) async throws {
         guard plan.outputs > 0, plan.sampleRate > 0 else { throw AudioBakeError.nothingToBake }
         let rate = plan.sampleRate, outputs = plan.outputs
         let length = max(plan.length, minimumLength)
@@ -173,12 +184,63 @@ public enum AudioBake {
         settings[AVLinearPCMIsBigEndianKey] = false
         settings[AVLinearPCMIsNonInterleaved] = false      // a file's samples are always interleaved on disk
 
-        // Each source with a feed, its reader, and how long one play of it is.
-        var streams: [Int: LoopingStream] = [:]
-        for source in Set(plan.feeds.map(\.source)) {
-            let url = sources[source]
-            let seconds = try await AVURLAsset(url: url).load(.duration).seconds
-            streams[source] = try await LoopingStream(url: url, sampleRate: rate, period: Int((seconds * rate).rounded()), looping: looping)
+        // One pass over the whole mix, a block at a time. Each pass opens fresh readers,
+        // because a reader only goes forward.
+        func render(master: Float, _ deliver: (AVAudioPCMBuffer, Int) throws -> Void) async throws {
+            // Each source with a feed, its reader, and how long one play of it is.
+            var streams: [Int: LoopingStream] = [:]
+            for source in Set(plan.feeds.map(\.source)) {
+                let url = sources[source]
+                let seconds = try await AVURLAsset(url: url).load(.duration).seconds
+                streams[source] = try await LoopingStream(url: url, sampleRate: rate, period: Int((seconds * rate).rounded()), looping: looping)
+            }
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(blockFrames)),
+                  let channels = buffer.floatChannelData else { throw AudioBakeError.nothingToBake }
+            var written = 0
+            while written < total {
+                let frames = min(blockFrames, total - written)
+                buffer.frameLength = AVAudioFrameCount(frames)
+                for c in 0..<outputs { channels[c].update(repeating: 0, count: frames) }
+                var blocks: [Int: [Float]] = [:]
+                for (source, stream) in streams { blocks[source] = try await stream.read(frames: frames) }
+                for feed in plan.feeds {
+                    guard let block = blocks[feed.source], let stream = streams[feed.source] else { continue }
+                    // The average of the channels, so a sum can't clip: two
+                    // full-scale channels added would reach 2.0. Dividing by the
+                    // count is EQUAL-GAIN SUMMING. The level it gives depends on how
+                    // alike the channels are: identical channels keep their level,
+                    // uncorrelated stereo comes out about 3 dB quieter, and a file
+                    // with one silent side loses 6 dB. That last case is why a
+                    // one-sided file takes its live channel instead of being summed.
+                    let gain = Float(feed.gain) * master / Float(feed.channels.count)
+                    let target = channels[feed.output - 1]
+                    for ch in feed.channels where ch < stream.channels {
+                        // The reader's samples are INTERLEAVED (L R L R …: one
+                        // frame after another) and the buffer's are PLANAR (one
+                        // array per channel). So this walks the block with a
+                        // STRIDE of the channel count, from this channel's offset.
+                        var i = ch, f = 0
+                        while i < block.count, f < frames {
+                            target[f] += block[i] * gain
+                            i += stream.channels
+                            f += 1
+                        }
+                    }
+                }
+                try deliver(buffer, frames)
+                written += frames
+            }
+        }
+
+        var master: Float = 1
+        if preventClipping {
+            var peak: Float = 0
+            try await render(master: 1) { buffer, frames in
+                for c in 0..<outputs {
+                    for f in 0..<frames { peak = max(peak, abs(buffer.floatChannelData![c][f])) }
+                }
+            }
+            if peak > 1 { master = 1 / peak }
         }
 
         let temporary = destination.deletingLastPathComponent()
@@ -189,42 +251,7 @@ public enum AudioBake {
             // header; so the rename below must come after the scope ends.
             do {
                 let file = try AVAudioFile(forWriting: temporary, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(blockFrames)),
-                      let channels = buffer.floatChannelData else { throw AudioBakeError.nothingToBake }
-                var written = 0
-                while written < total {
-                    let frames = min(blockFrames, total - written)
-                    buffer.frameLength = AVAudioFrameCount(frames)
-                    for c in 0..<outputs { channels[c].update(repeating: 0, count: frames) }
-                    var blocks: [Int: [Float]] = [:]
-                    for (source, stream) in streams { blocks[source] = try await stream.read(frames: frames) }
-                    for feed in plan.feeds {
-                        guard let block = blocks[feed.source], let stream = streams[feed.source] else { continue }
-                        // The average of the channels, so a sum can't clip: two
-                        // full-scale channels added would reach 2.0. Dividing by the
-                        // count is EQUAL-GAIN SUMMING. The level it gives depends on how
-                        // alike the channels are: identical channels keep their level,
-                        // uncorrelated stereo comes out about 3 dB quieter, and a file
-                        // with one silent side loses 6 dB. That last case is why a
-                        // one-sided file takes its live channel instead of being summed.
-                        let gain = 1 / Float(feed.channels.count)
-                        let target = channels[feed.output - 1]
-                        for ch in feed.channels where ch < stream.channels {
-                            // The reader's samples are INTERLEAVED (L R L R …: one
-                            // frame after another) and the buffer's are PLANAR (one
-                            // array per channel). So this walks the block with a
-                            // STRIDE of the channel count, from this channel's offset.
-                            var i = ch, f = 0
-                            while i < block.count, f < frames {
-                                target[f] += block[i] * gain
-                                i += stream.channels
-                                f += 1
-                            }
-                        }
-                    }
-                    try file.write(from: buffer)
-                    written += frames
-                }
+                try await render(master: master) { buffer, _ in try file.write(from: buffer) }
             }
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: temporary, to: destination)

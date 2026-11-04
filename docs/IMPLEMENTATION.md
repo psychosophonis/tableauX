@@ -468,6 +468,16 @@ NOT checked:
   Apple's encoder.
 - A bake over 4 GB is refused rather than handled.
 
+### v5: stereo fold-down (2026-11-05, committed, not released)
+From Mat, to check multichannel work on a stereo system. Measured through the app on
+the virtual device, low level: outputs land on the side their pan says, a centred
+output reads 3 dB down on both sides, and Preview adds the sound of a Mac composed
+ahead, found from `audio/<Mac>/`, while Present doesn't. The bake's level is checked
+in `AudioBakeTests`. Found and fixed: routes for a Mac composed ahead were never made
+from its subfolder, and a bake could run twice, once during the show. Not checked: by
+ear; the pan sliders by hand (drawn, not dragged); a real work's level; whether a
+player's pan edit reaches the conductor outside a test.
+
 ## Open questions
 - ~~Is building a 2000-segment composition fast enough?~~ Answered by
   `proofs/compose-time.swift`: 0.03–0.05 s to build, ready 0.02–0.06 s later

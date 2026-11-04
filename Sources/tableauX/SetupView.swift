@@ -155,8 +155,12 @@ private struct ShowRow: View {
     /// than the show is designed for, so it's clear before pressing.
     private var presentLabel: String {
         if model.conductsOnly { return "Present (on the other Macs)" }
+        // [claude] v5: said on the button, so a home setting can't reach a gallery
+        // opening unnoticed (§ Stereo fold-down).
+        let sound = model.foldsToStereo ? ", stereo fold-down" : ""
         return model.displays.count < model.designDisplays
-            ? "Present (\(model.displays.count) of \(model.designDisplays) displays)" : "Present"
+            ? "Present (\(model.displays.count) of \(model.designDisplays) displays\(sound))"
+            : (sound.isEmpty ? "Present" : "Present (stereo fold-down)")
     }
 }
 
