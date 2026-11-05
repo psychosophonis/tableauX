@@ -437,8 +437,11 @@ Work in this release:
 
 ## v5: multichannel sound (2026-11-05, released as pre-release 0.4.0-beta.1)
 Pre-release from the `beta` branch, so that testers can try it. `main` on GitHub and
-the "latest" download stay on 0.3.25 until sound is proven; the README's beta notice
-comes out when this merges to main.
+the "latest" download stay on 0.3.25 until sound is proven. GitHub's `main` README
+points to the beta under its download link (b665283), a commit made directly on
+`origin/main`, so this local `main` has diverged from it: merge, don't force-push
+(a test merge is clean). Both that note and the `beta` README's notice come out when
+sound merges to main.
 
 Built from § v5. `swift test`: 208 tests, 1 skipped (the loopback, which needs a
 named device).
