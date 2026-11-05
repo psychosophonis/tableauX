@@ -137,6 +137,9 @@ buttons at the top:
 
 ### Multichannel sound
 
+**Beta:** this section describes `0.4.0-beta.1`, which is not the main download. Get
+it from [Releases](../../releases). It has not yet been tested on a real interface.
+
 No DAW needed: put a work's sound files in an `audio` folder inside its folder,
 on the Mac that plays them, and name each for its output:
 

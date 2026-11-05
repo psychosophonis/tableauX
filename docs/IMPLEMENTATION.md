@@ -435,7 +435,11 @@ Work in this release:
 - Esc, Space and multi-display starts exercised by Mat on the dev machine
   (two and three displays, 4K ProRes): all worked.
 
-## v5: multichannel sound (2026-11-05, committed, not released)
+## v5: multichannel sound (2026-11-05, released as pre-release 0.4.0-beta.1)
+Pre-release from the `beta` branch, so that testers can try it. `main` on GitHub and
+the "latest" download stay on 0.3.25 until sound is proven; the README's beta notice
+comes out when this merges to main.
+
 Built from § v5. `swift test`: 208 tests, 1 skipped (the loopback, which needs a
 named device).
 
@@ -468,7 +472,7 @@ NOT checked:
   Apple's encoder.
 - A bake over 4 GB is refused rather than handled.
 
-### v5: stereo fold-down (2026-11-05, committed, not released)
+### v5: stereo fold-down (2026-11-05, released as pre-release 0.4.0-beta.1)
 From Mat, to check multichannel work on a stereo system. Measured through the app on
 the virtual device, low level: outputs land on the side their pan says, a centred
 output reads 3 dB down on both sides, and Preview adds the sound of a Mac composed
