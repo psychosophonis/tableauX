@@ -285,6 +285,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// [claude] v6: add several sound files, or whole folders of them, in one go
+    /// (§ v6 › Loading a selection or a folder). Mat, after the Behringer run:
+    /// "annoying to 'Add File' for each channel".
+    ///
+    /// Each file takes the next free output at or above this Mac's first output, in
+    /// the order given. A folder contributes the sound files directly inside it, not
+    /// its subfolders: a work's `audio/` folder uses subfolders to mean ANOTHER MAC'S
+    /// sound (§ Getting sound in), so recursing would route another Mac's files here.
+    func addSources(_ urls: [URL], on m: String) {
+        let fm = FileManager.default
+        var files: [String] = []
+        for url in urls {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                let inside = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
+                files += AudioScan.sounds(inside).map { url.appendingPathComponent($0).path }
+            } else {
+                files.append(url.path)
+            }
+        }
+        guard !files.isEmpty else { return }
+        // The allocation itself is AudioScan.add, the same rule the folder scan uses,
+        // so a file named "front_5.wav" asks for output 5 whichever way it arrived.
+        setRoutes(AudioScan.add(existing: routes(on: m), paths: files, firstOutput: sound.firstOutput), on: m)
+    }
+
+    /// [claude] v6: the staggered ring (§ v6 › Pairs may overlap, and may wrap). The
+    /// decision is a pure function in PlayerCore so it can be tested without a window;
+    /// this only supplies the Mac's first output and shares the result as any edit is.
+    func staggerPairs(on m: String) {
+        setRoutes(AudioRouting.stagger(routes(on: m), from: sound.firstOutput), on: m)
+    }
+
     private func soundRequest(machine m: String, work w: Int) -> SoundRequest? {
         guard show.works.indices.contains(w) else { return nil }
         let work = show.works[w], routes = work.routes(on: m)
@@ -815,8 +848,12 @@ final class AppModel: ObservableObject {
             if !theirs.isEmpty { inventories.append(Inventory(machine: m.name, displays: m.displays, folders: [:], audio: theirs)) }
         }
         let labels = Dictionary(show.machines.compactMap { m in m.label.map { (m.name, $0) } }, uniquingKeysWith: { a, _ in a })
+        // [claude] v6: only this Mac's first output is known here. Another Mac's floor
+        // is its own setting and arrives with its routes, so the conductor assumes 1
+        // for a player that hasn't said otherwise (§ v6 › First output, per Mac).
         let merged = PlaylistMerge.merge(show.works, with: inventories, firstScreens: [name: firstScreen],
-                                         addingNewWorks: autoShow, labels: labels)
+                                         addingNewWorks: autoShow, labels: labels,
+                                         firstOutputs: [name: sound.firstOutput])
         // [claude] Only assign when something changed: rescans run every few
         // seconds, and every assignment would otherwise trigger an autosave.
         if merged != show.works { show.works = merged }
@@ -1511,7 +1548,11 @@ final class AppModel: ObservableObject {
             }
         }
         guard complete else { return }                           // try again when the measuring is done
-        let inv = Inventory(machine: Self.thisMac, displays: displays.count, folders: folders, audio: sounds.isEmpty ? nil : sounds)
+        // [claude] v6: this Mac's first usable output goes with its inventory, because
+        // the conductor is the one that invents this Mac's routes and cannot know what
+        // its interface reserves (§ v6 › First output, per Mac).
+        let inv = Inventory(machine: Self.thisMac, displays: displays.count, folders: folders,
+                            audio: sounds.isEmpty ? nil : sounds, firstOutput: sound.firstOutput)
         if inv != sentInventory {
             sentInventory = inv
             linkClient?.send(.inventory(inv))

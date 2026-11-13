@@ -29,9 +29,23 @@ public struct AudioRoute: Codable, Equatable {
     /// The first output it goes to, from 1; 0 = off. Outputs are numbered per Mac (Mat).
     public var output: Int
     public var take: AudioTake
+    /// [claude] v6: where a pair's right channel goes when it is not `output + 1`.
+    /// This is how the last pair of a ring is written — 6 then 1 (§ v6 › Pairs may
+    /// overlap, and may wrap).
+    ///
+    /// Stored rather than worked out, which is the whole point: nothing in a work's
+    /// routes says how big the ring is (is output 6 the last speaker in the room, or
+    /// just the highest one this work happens to use?), so a wrap derived by
+    /// inference would move sound between works as their routes changed. An
+    /// optional also keeps every show file written before v6 readable (tested in
+    /// `AudioRoutingTests`). The other direction — a show written now opened on a
+    /// pre-v6 build, where the pair would simply land on N+1 — follows from
+    /// `JSONDecoder` ignoring keys it has no property for, and is not tested here,
+    /// since this build has no way to run the old decoder.
+    public var second: Int?
 
-    public init(file: String? = nil, screen: Int? = nil, output: Int, take: AudioTake = .auto) {
-        self.file = file; self.screen = screen; self.output = output; self.take = take
+    public init(file: String? = nil, screen: Int? = nil, output: Int, take: AudioTake = .auto, second: Int? = nil) {
+        self.file = file; self.screen = screen; self.output = output; self.take = take; self.second = second
     }
 }
 
@@ -131,6 +145,11 @@ public enum AudioRouting {
         public var lines: [String] = []       // per route, what it was read as
         public var problems: [String] = []    // stop Present
         public var warnings: [String] = []
+        /// [claude] v6: some output carries more than one source, so the bake has to
+        /// sum them and watch its own peak (§ v6 › Mixing on one output). Summing is
+        /// the one routing choice that changes how loud the work is, so the fact is
+        /// carried out of the plan rather than rediscovered by whoever bakes it.
+        public var mixed = false
         /// Some route's source hasn't been measured yet, so this plan can't be baked.
         public var incomplete = false
     }
@@ -196,6 +215,15 @@ public enum AudioRouting {
             taken.formUnion(first..<first + count)
             plan.lines[i] = "Outputs \(first)–\(first + count - 1): \(why)"
         }
+        /// [claude] v6: a pair on two outputs that need not be adjacent, so the last
+        /// pair of a ring can wrap (6 then 1). Unlike `span` it does not care whether
+        /// the second output is already taken: overlapping pairs are the point.
+        func pairAcross(_ i: Int, _ low: Int, _ high: Int, _ why: String) {
+            feedsOf[i] = [Feed(output: low, source: i, channels: [0]),
+                          Feed(output: high, source: i, channels: [1])]
+            taken.insert(low); taken.insert(high)
+            plan.lines[i] = "Outputs \(low) and \(high): \(why)"
+        }
 
         for (i, r) in routes.enumerated() {
             // Output 0 is "off". The route stays, so a rescan doesn't see a new
@@ -220,7 +248,17 @@ public enum AudioRouting {
             case .left: one(i, [0], c == 1 ? "mono" : "left channel, as you set")
             case .right: one(i, [min(1, c - 1)], c == 1 ? "mono" : "right channel, as you set")
             case .pair:
-                if c == 1 { one(i, [0], "mono") } else { span(i, count: 2, "pair, as you set") }
+                // v6: a pair set by hand goes where it is told, even onto an output
+                // another source already uses — a staggered ring is made of exactly
+                // those overlaps. Automatic still refuses to spread onto a taken
+                // output (further down), because it is guessing and this is not.
+                if c == 1 {
+                    one(i, [0], "mono")
+                } else if let second = r.second, second >= 1, second != r.output {
+                    pairAcross(i, r.output, second, "pair, as you set")
+                } else {
+                    span(i, count: 2, "pair, as you set")
+                }
             case .auto:
                 switch (c, f.stereo) {
                 case (1, _): one(i, [0], "mono")
@@ -256,16 +294,43 @@ public enum AudioRouting {
             }
         }
 
-        // Two sources on one output is a mistake to show, not something to mix
-        // silently: mixing is what a person would have asked for by hand.
-        var owner: [Int: Int] = [:]
+        // [claude] v6, from Mat's ring on the Behringer: an output with more than one
+        // source is MIXED, not refused. § v5 made it a problem that blocked Present,
+        // written when nothing in the app wanted to mix; a staggered ring is made of
+        // nothing but shared outputs, so the rule had to go (§ v6 › Mixing on one
+        // output supersedes § The bake).
+        //
+        // What replaces it is information rather than a veto, and the contrast with
+        // `AudioOutputs.pick` further down is worth seeing: that one FAILS CLOSED
+        // (refuses rather than guess a device) because a wrong guess sends a show's
+        // sound into the wrong room. Here the person has said what they want by
+        // setting two routes to one output, so failing closed would only stand in
+        // their way. Which way a decision should fail depends on who made it and what
+        // a mistake costs — not on a general preference for strictness.
+        //
+        // Each row says which outputs it shares, and `mixed` tells the bake to
+        // measure its own peak. The
+        // reason for saying so at all is that summing is the one routing choice that
+        // changes the work's LEVEL — the bake's single downward gain is set by the
+        // loudest sum anywhere in it. Measured: two sources at 0.7 cost 2.9 dB
+        // (proofs/stagger-ring-probe.swift, both rings). The worst case is arithmetic
+        // rather than measured: two sources at full scale sum to 2.0, so the gain
+        // cannot be deeper than 6 dB for a pair. A person whose ring came out quieter
+        // needs to be able to see why.
+        var sourcesOn: [Int: [Int]] = [:]
         for feeds in feedsOf {
-            for feed in feeds {
-                if let other = owner[feed.output], other != feed.source {
-                    plan.problems.append("Output \(feed.output) has two sources: \(name(routes[other])) and \(name(routes[feed.source])).")
-                }
-                owner[feed.output] = feed.source
+            for feed in feeds where !(sourcesOn[feed.output]?.contains(feed.source) ?? false) {
+                sourcesOn[feed.output, default: []].append(feed.source)
             }
+        }
+        var sharedBy = [Set<Int>](repeating: [], count: routes.count)
+        for (output, sources) in sourcesOn where sources.count > 1 {
+            plan.mixed = true
+            for s in sources { sharedBy[s].insert(output) }
+        }
+        for i in routes.indices where !sharedBy[i].isEmpty {
+            let list = sharedBy[i].sorted().map(String.init).joined(separator: ", ")
+            plan.lines[i] += ", mixed with another source on \(sharedBy[i].count == 1 ? "output" : "outputs") \(list)"
         }
 
         plan.feeds = feedsOf.flatMap { $0 }.sorted { $0.output < $1.output }
@@ -280,6 +345,40 @@ public enum AudioRouting {
             plan.warnings.append(String(format: "Sound sources differ in length: %.2f s to %.2f s. Shorter ones go silent early, or loop if this work loops shorter screens.", short, plan.length))
         }
         return plan
+    }
+
+    /// [claude] v6: the staggered ring Mat asked for (§ v6 › Pairs may overlap, and
+    /// may wrap). Each source in turn takes the pair (o, o+1), o advancing by one,
+    /// and the last pair wraps back to `firstOutput`: with six sources from output 1
+    /// that is 1-2, 2-3, 3-4, 4-5, 5-6, 6-1.
+    ///
+    /// The ring's size is the number of sources that are on, so the wrap closes on
+    /// the speaker the first source started from. Sources set to Off keep their
+    /// place in the list but are not part of the ring: Off is how a file in the
+    /// folder is silenced, and a bulk action must not quietly bring one back.
+    ///
+    /// Each route is given `take: .pair` explicitly rather than left on Automatic,
+    /// because Automatic would read a dual-mono file as one speaker and the ring
+    /// would collapse where a student's file happened to be dual mono. The whole
+    /// point of a bulk action is that the person has said what the arrangement is.
+    ///
+    /// It is a PURE FUNCTION of the list and the first output, so it is IDEMPOTENT:
+    /// staggering an already-staggered list returns it unchanged, which matters
+    /// because routes are shared with players and autosaved on every change.
+    public static func stagger(_ routes: [AudioRoute], from firstOutput: Int = 1) -> [AudioRoute] {
+        let ring = routes.indices.filter { routes[$0].output >= 1 }
+        guard ring.count > 1 else { return routes }
+        var out = routes
+        let first = max(1, firstOutput)
+        for (k, i) in ring.enumerated() {
+            out[i].take = .pair
+            out[i].output = first + k
+            let next = first + (k + 1) % ring.count
+            // Only the pair that wraps needs its second output stored; the rest are
+            // N+1, which is what a route without `second` already means.
+            out[i].second = next == out[i].output + 1 ? nil : next
+        }
+        return out
     }
 
     /// How a route is named to a person.
@@ -333,13 +432,21 @@ public enum AudioScan {
     /// to the show triggers an autosave and a share with the players, so a merge that
     /// wasn't idempotent would keep the whole show churning with nothing changed.
     /// nil if there is nothing to route.
-    public static func routes(existing: [AudioRoute]?, folder: String, names: [String]) -> [AudioRoute]? {
+    ///
+    /// [claude] v6: `firstOutput` is the lowest output automatic allocation may use
+    /// (§ v6 › First output, per Mac). Mat's Behringer treats outputs 1-2 as a master
+    /// stereo pair, so a work there starts at 3, and first-fit from 1 put a file on
+    /// the master pair. A file named `_N` still asks for output N even below the
+    /// floor: that is explicit, and the floor only governs guesses.
+    public static func routes(existing: [AudioRoute]?, folder: String, names: [String],
+                              firstOutput: Int = 1) -> [AudioRoute]? {
         var out = existing ?? []
         let known = Set(out.compactMap(\.file))
         var taken = Set(out.map(\.output))
         let new = sounds(names).filter { !known.contains(path(folder, $0)) }
+        let floor = max(1, firstOutput)
         func lowestFree() -> Int {
-            var n = 1
+            var n = floor
             while taken.contains(n) { n += 1 }
             return n
         }
@@ -361,6 +468,44 @@ public enum AudioScan {
 
     /// "Smith/audio/a_1.wav": how a route stores a file, as a panel does.
     public static func path(_ folder: String, _ name: String) -> String { "\(folder)/\(folderName)/\(name)" }
+
+    /// [claude] v6: files chosen by hand (Add › Sound files or folders…) added to a
+    /// Mac's routes, by the same rule as files found in a work's folder: a name
+    /// ending `_N` asks for output N if it is free, everything else takes the lowest
+    /// free output at or above `firstOutput`, in the order given.
+    ///
+    /// It lives here, beside `routes`, so the two ways sound arrives cannot drift
+    /// apart — ONE SOURCE OF TRUTH for the rule, rather than the same allocation
+    /// written once for the scan and once for the open panel. It is also why this is
+    /// a pure function of paths and existing routes: the app's copy would have needed
+    /// a window to test.
+    public static func add(existing: [AudioRoute], paths: [String], firstOutput: Int = 1) -> [AudioRoute] {
+        var out = existing
+        let known = Set(out.compactMap(\.file))
+        var taken = Set(out.map(\.output))
+        let floor = max(1, firstOutput)
+        let new = paths.filter { !known.contains($0) }
+        func lowestFree() -> Int {
+            var n = floor
+            while taken.contains(n) { n += 1 }
+            return n
+        }
+        // Numbered first, so a free output isn't handed to an unnumbered file and
+        // then found to be the one another file asked for by name.
+        var placed = Set<String>()
+        for p in new {
+            guard let n = FolderScan.screenNumber((p as NSString).lastPathComponent), !taken.contains(n) else { continue }
+            taken.insert(n)
+            placed.insert(p)
+            out.append(AudioRoute(file: p, output: n))
+        }
+        for p in new where !placed.contains(p) {
+            let n = lowestFree()
+            taken.insert(n)
+            out.append(AudioRoute(file: p, output: n))
+        }
+        return out
+    }
 }
 
 // MARK: - Which device plays it (§ Output device)

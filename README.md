@@ -137,8 +137,10 @@ buttons at the top:
 
 ### Multichannel sound
 
-**Beta:** this section describes `0.4.0-beta.1`, which is not the main download. Get
-it from [Releases](../../releases). It has not yet been tested on a real interface.
+**Beta:** this section describes `0.4.0-beta.2`, which is not the main download. Get
+it from [Releases](../../releases). Six outputs of a Behringer interface have now
+played a short sound work correctly; sound against picture, and over hours, has not
+been tested.
 
 No DAW needed: put a work's sound files in an `audio` folder inside its folder,
 on the Mac that plays them, and name each for its output:
@@ -156,6 +158,18 @@ no number take the lowest free outputs. The **Sound** table under the screens li
 every source with the output it goes to, and **Add** sends a screen's video sound
 there too. tableauX combines them into one prepared file in the background, and
 Present waits for it.
+
+**Getting the files in:** **Add** › *Sound files or folders…* takes several files,
+or a whole folder, at once; each takes the next free output. If your interface keeps
+its first outputs for a master or monitor pair — the Behringer at uni uses 1-2 that
+way — set **New sound starts at output** to the first one you can really use, and
+new files are placed from there. Routes you have already set never move.
+
+**A ring of speakers:** **Stagger pairs** spreads each stereo source between two
+adjacent speakers, overlapping — outputs 1-2, 2-3, 3-4 … and the last pair back to
+the first. Outputs that end up carrying more than one source are mixed; if a sum
+would clip, the whole work is turned down to fit (about 3 dB for two loud sources),
+which keeps the balance between speakers. Each row says which outputs it shares.
 
 **A stereo file meant for one speaker:** on **Automatic**, a file with both sides
 the same, or one side silent, takes one output. A real stereo file takes outputs N

@@ -275,9 +275,21 @@ public struct Inventory: Codable, Equatable {
     /// named relative to it ("a_1.wav", "Gallery 2/b.wav"). Kept apart from
     /// `folders`, whose every key is a work and every file a screen's video.
     public var audio: [String: [InventoryFile]]?
+    /// [claude] v6: the lowest output this Mac's interface leaves free for a work
+    /// (§ v6 › First output, per Mac). It is a local setting, but it has to TRAVEL,
+    /// because the Mac that allocates a route is not always the Mac that will play
+    /// it: a conductor merging a player's inventory invents that player's routes. A
+    /// player with a Behringer (outputs 1-2 are its master pair) would otherwise have
+    /// its sound placed on the master pair by a conductor that cannot know.
+    ///
+    /// Optional, and read as 1 when absent, so a player running an older build still
+    /// decodes: the same backward-compatible widening as `audio` above.
+    public var firstOutput: Int?
 
-    public init(machine: String, displays: Int, folders: [String: [InventoryFile]], audio: [String: [InventoryFile]]? = nil) {
-        self.machine = machine; self.displays = displays; self.folders = folders; self.audio = audio
+    public init(machine: String, displays: Int, folders: [String: [InventoryFile]],
+                audio: [String: [InventoryFile]]? = nil, firstOutput: Int? = nil) {
+        self.machine = machine; self.displays = displays; self.folders = folders
+        self.audio = audio; self.firstOutput = firstOutput
     }
 }
 
@@ -303,8 +315,17 @@ public enum PlaylistMerge {
     ///
     /// [claude] v5: each Mac's sound files become routes the same way
     /// (AudioScan.routes). `labels` gives a Mac's label, for its subfolder.
+    ///
+    /// [claude] v6: `firstOutputs` is each Mac's lowest usable output, for an
+    /// interface whose first outputs are a master pair (§ v6 › First output, per
+    /// Mac). A Mac's own report wins: `Inventory.firstOutput` comes from the Mac
+    /// that owns the interface, while this argument is what the Mac doing the
+    /// merging knows — its own setting, and nothing about anyone else's hardware.
+    /// Falling back to 1 is the only safe default, since an interface that reserves
+    /// its first outputs is the unusual case.
     public static func merge(_ works: [Work], with inventories: [Inventory], firstScreens: [String: Int] = [:],
-                             addingNewWorks: Bool = true, labels: [String: String] = [:]) -> [Work] {
+                             addingNewWorks: Bool = true, labels: [String: String] = [:],
+                             firstOutputs: [String: Int] = [:]) -> [Work] {
         var result = works
         let known = Set(works.map(\.name))
         // [claude] Full-path folders are a player's linked files, not works
@@ -322,7 +343,9 @@ public enum PlaylistMerge {
             for inv in inventories {
                 guard let files = inv.audio?[result[i].name] else { continue }
                 let names = AudioScan.own(files.map(\.name), machine: inv.machine, label: labels[inv.machine])
-                let routes = AudioScan.routes(existing: result[i].audio?[inv.machine], folder: result[i].name, names: names)
+                let routes = AudioScan.routes(existing: result[i].audio?[inv.machine], folder: result[i].name,
+                                              names: names,
+                                              firstOutput: inv.firstOutput ?? firstOutputs[inv.machine] ?? 1)
                 if routes != result[i].audio?[inv.machine] { result[i].setRoutes(routes, on: inv.machine) }
             }
         }

@@ -57,6 +57,20 @@ final class SoundPrep: ObservableObject {
         didSet { UserDefaults.standard.set(listenStereo, forKey: Self.listenKey); onChange?() }
     }
     private static let listenKey = "soundListenStereo"
+    /// [claude] v6: the lowest output this Mac's interface makes available to a work
+    /// (§ v6 › First output, per Mac). Mat's Behringer at uni treats outputs 1-2 as a
+    /// master stereo pair, so his works run on 3-8, and allocation from output 1 put
+    /// a file on the master pair.
+    ///
+    /// Per Mac, in UserDefaults beside the interface and Listen, for the same reason
+    /// they are: it describes the hardware in this room, and a show file or a kit
+    /// carrying it to another Mac would silently move that Mac's sound. It is a FLOOR
+    /// ON NEW ALLOCATION only — never a remapping of a route already set, because the
+    /// Sound table has to keep saying which speaker actually gets what.
+    @Published var firstOutput: Int = max(1, UserDefaults.standard.integer(forKey: SoundPrep.firstOutputKey)) {
+        didSet { UserDefaults.standard.set(firstOutput, forKey: Self.firstOutputKey); onChange?() }
+    }
+    private static let firstOutputKey = "soundFirstOutput"
 
     /// Called when a job finishes, so the model can recheck what blocks Present.
     var onChange: (() -> Void)?
@@ -201,8 +215,16 @@ final class SoundPrep: ObservableObject {
                 let s = state(r)
                 guard s.status == .baking, !isQueued(s.file.lastPathComponent) else { continue }
                 let sources = r.paths.map { URL(fileURLWithPath: $0 ?? "/dev/null") }
+                // [claude] v6: a full bake now watches its own peak whenever an output
+                // carries more than one source (a staggered ring, or two files sent to
+                // one speaker). Until v6 only a fold-down could sum, so this was always
+                // false. It stays false for an unmixed work, where every output holds
+                // one source and cannot exceed what that source already was: measuring
+                // the peak costs a second pass over every file, so it is only paid for
+                // when a sum could actually clip.
                 queue.append(.bake(name: s.file.lastPathComponent, plan: s.plan, sources: sources, to: s.file,
-                                   minimumLength: r.minimumLength, looping: r.looping, preventClipping: false))
+                                   minimumLength: r.minimumLength, looping: r.looping,
+                                   preventClipping: s.plan.mixed))
             }
         }
         for r in stereo {

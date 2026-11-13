@@ -88,11 +88,127 @@ final class AudioRoutingTests: XCTestCase {
         XCTAssertTrue(p.lines[1].contains("Outputs 3–4"), p.lines[1])
     }
 
-    func testTwoSourcesOnOneOutputIsAProblemNotAMix() {
-        XCTAssertFalse(AudioRouting.plan(routes: [route(1), route(1)], facts: [mono, mono]).problems.isEmpty)
-        // A span reaching another source's output is the same mistake.
+    /// [claude] v6 REPLACES the v5 rule this test used to assert (two sources on one
+    /// output blocks Present). Mat's ring on the Behringer is made of shared outputs,
+    /// so sharing is now mixed and merely reported. Kept as a test, inverted, because
+    /// the change of rule is the thing worth pinning down.
+    func testTwoSourcesOnOneOutputAreMixedAndSaidSo() {
+        let p = AudioRouting.plan(routes: [route(1), route(1)], facts: [mono, mono])
+        XCTAssertTrue(p.problems.isEmpty, "\(p.problems)")
+        XCTAssertTrue(p.mixed)
+        XCTAssertEqual(p.feeds.map(\.output), [1, 1])
+        XCTAssertTrue(p.lines[0].contains("mixed with another source on output 1"), p.lines[0])
+        // A many-channel file reaching another source's output mixes there too.
         let six = AudioFacts(channels: 6, duration: 10)
-        XCTAssertFalse(AudioRouting.plan(routes: [route(1), route(3)], facts: [six, mono]).problems.isEmpty)
+        let spanning = AudioRouting.plan(routes: [route(1), route(3)], facts: [six, mono])
+        XCTAssertTrue(spanning.problems.isEmpty)
+        XCTAssertTrue(spanning.mixed)
+    }
+
+    func testAnUnmixedWorkIsNotMarkedMixed() {
+        XCTAssertFalse(AudioRouting.plan(routes: [route(1), route(2), route(3)],
+                                         facts: [mono, mono, mono]).mixed)
+    }
+
+    // MARK: v6 — the staggered ring (§ v6 › Pairs may overlap, and may wrap)
+
+    /// Mat's work on the Behringer: six stereo pairs on 1-2, 2-3, 3-4, 4-5, 5-6, 6-1.
+    func testAStaggeredRingPutsTwoSourcesOnEveryOutput() {
+        let ring = AudioRouting.stagger((1...6).map { route($0) })
+        XCTAssertEqual(ring.map(\.output), [1, 2, 3, 4, 5, 6])
+        XCTAssertEqual(ring.map(\.take), Array(repeating: .pair, count: 6))
+        XCTAssertEqual(ring.map(\.second), [nil, nil, nil, nil, nil, 1], "only the last pair wraps")
+
+        let p = AudioRouting.plan(routes: ring, facts: Array(repeating: stereo(.different), count: 6))
+        XCTAssertTrue(p.problems.isEmpty, "\(p.problems)")
+        XCTAssertTrue(p.mixed)
+        XCTAssertEqual(p.outputs, 6)
+        // Every output carries exactly two channels: the left of its own file and
+        // the right of the file before it in the ring.
+        for output in 1...6 {
+            let here = p.feeds.filter { $0.output == output }
+            XCTAssertEqual(here.count, 2, "output \(output)")
+            XCTAssertEqual(Set(here.map(\.channels)), [[0], [1]], "output \(output)")
+        }
+        XCTAssertEqual(p.feeds.filter { $0.output == 1 }.map(\.source).sorted(), [0, 5], "the wrap closes the ring")
+    }
+
+    func testStaggerFromTheBehringersFirstFreeOutput() {
+        let ring = AudioRouting.stagger((1...6).map { route($0) }, from: 3)
+        XCTAssertEqual(ring.map(\.output), [3, 4, 5, 6, 7, 8])
+        XCTAssertEqual(ring.last?.second, 3, "the ring closes on the output it started from, not on 1")
+    }
+
+    func testStaggerIsIdempotentAndLeavesOffSourcesOff() {
+        let sources = [route(1), AudioRoute(file: "W/audio/off.wav", output: 0), route(2), route(3)]
+        let once = AudioRouting.stagger(sources)
+        XCTAssertEqual(AudioRouting.stagger(once), once, "a rescan and a share must not churn")
+        XCTAssertEqual(once[1].output, 0, "Off stays off")
+        XCTAssertEqual(once.map(\.output), [1, 0, 2, 3])
+        XCTAssertEqual(once[3].second, 1, "the ring is the three sources that are on")
+    }
+
+    /// A pair set by hand goes where it is told even if the output is taken; that is
+    /// what Automatic refuses to do, and the difference is deliberate (§ v6).
+    func testAHandSetPairOverlapsButAutomaticStillSumsToOneSpeaker() {
+        let overlap = AudioRouting.plan(routes: [route(1, .pair), route(2, .pair)],
+                                        facts: [stereo(.different), stereo(.different)])
+        XCTAssertEqual(overlap.feeds.map(\.output), [1, 2, 2, 3])
+        XCTAssertTrue(overlap.mixed)
+
+        let automatic = AudioRouting.plan(routes: [route(1), route(2)],
+                                          facts: [stereo(.different), stereo(.different)])
+        XCTAssertEqual(automatic.feeds.map(\.output), [1, 2], "each summed to its own speaker")
+        XCTAssertFalse(automatic.mixed)
+    }
+
+    func testAWrappedPairIsReadBackFromTheShowFileAsWritten() throws {
+        let written = AudioRoute(file: "W/audio/f.wav", output: 6, take: .pair, second: 1)
+        let json = try JSONEncoder().encode(written)
+        XCTAssertEqual(try JSONDecoder().decode(AudioRoute.self, from: json), written)
+        // A show written before v6 has no "second" key at all, and must still read.
+        let old = try JSONDecoder().decode(AudioRoute.self, from: Data(#"{"file":"a.wav","output":3,"take":"pair"}"#.utf8))
+        XCTAssertNil(old.second)
+        XCTAssertEqual(AudioRouting.plan(routes: [old], facts: [stereo(.different)]).feeds.map(\.output), [3, 4],
+                       "without a second output a pair still means N and N+1")
+    }
+
+    /// Files chosen by hand follow the same rule as files found in a folder, which is
+    /// why the rule has one implementation (AudioScan.add).
+    func testFilesAddedByHandTakeNumbersAndThenTheLowestFreeOutput() {
+        let added = AudioScan.add(existing: [], paths: ["/a/one.wav", "/a/front_5.wav", "/a/two.wav"], firstOutput: 3)
+        XCTAssertEqual(added.map(\.output), [5, 3, 4], "the numbered file first, then the floor")
+        let again = AudioScan.add(existing: added, paths: ["/a/one.wav", "/a/three.wav"], firstOutput: 3)
+        XCTAssertEqual(again.count, 4, "a file already routed is not added twice")
+        XCTAssertEqual(again.last?.output, 6)
+    }
+
+    /// A player's own floor must win over the conductor's, because the conductor
+    /// invents a player's routes and knows nothing about that room's interface.
+    /// Found by the teaching review: before `Inventory.firstOutput` existed, a player
+    /// with a Behringer had its sound placed on outputs 1-2, its master pair.
+    func testAPlayersOwnFirstOutputBeatsTheConductors() throws {
+        let inv = Inventory(machine: "Gallery", displays: 1,
+                            folders: ["W": [InventoryFile(name: "W_1.mp4", duration: 10)]],
+                            audio: ["W": [InventoryFile(name: "a.wav", duration: 10)]],
+                            firstOutput: 3)
+        let works = PlaylistMerge.merge([], with: [inv], firstOutputs: ["Gallery": 1])
+        XCTAssertEqual(works.first?.routes(on: "Gallery").map(\.output), [3])
+
+        // A player on a build with no such field: the conductor's view is all there
+        // is, and 1 is the safe default.
+        var older = inv
+        older.firstOutput = nil
+        XCTAssertEqual(PlaylistMerge.merge([], with: [older]).first?.routes(on: "Gallery").map(\.output), [1])
+    }
+
+    func testNewSoundStartsAtTheMacsFirstOutput() throws {
+        let r = try XCTUnwrap(AudioScan.routes(existing: nil, folder: "W", names: ["a.wav", "b.wav"], firstOutput: 3))
+        XCTAssertEqual(r.map(\.output), [3, 4], "1-2 is the Behringer's master pair")
+        // A name that asks for an output explicitly is still honoured: the floor
+        // governs guesses, not what a person wrote on the file.
+        let numbered = try XCTUnwrap(AudioScan.routes(existing: nil, folder: "W", names: ["x_1.wav", "c.wav"], firstOutput: 3))
+        XCTAssertEqual(numbered.map(\.output), [1, 3])
     }
 
     func testAManyChannelFileTakesOutputsInOrder() {

@@ -15,6 +15,7 @@ Governs:
 - `Tests/**` (§ Verification)
 - `Package.swift`
 - `scripts/**` (test media for T6, § Targets; make-app.sh's release packaging is described in its own header, not in a spec section)
+- `proofs/**` (the falsification probes: each one tests a claim in § Targets or a § Riskiest assumption section, and its header names the claim)
 
 Verify:
 ```

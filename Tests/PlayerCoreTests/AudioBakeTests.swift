@@ -248,4 +248,90 @@ final class AudioBakeTests: XCTestCase {
         do { try await AudioBake.bake(plan: plan, sources: [dir.appendingPathComponent("missing.wav")], to: out) } catch {}
         XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
     }
+
+    // MARK: v6 — mixing on one output (§ v6; T25, T26)
+
+    /// A burst of tone in one time slot and silence everywhere else, so a channel can
+    /// be identified in the bake by WHERE IN TIME its energy is. The alternative,
+    /// telling channels apart by frequency, needs a filter to measure; separating them
+    /// in time needs only the RMS of a slice, which is what makes this test readable.
+    private func burst(slot: Int, of slots: Int, frames: Int = 48000, amplitude: Float = 0.5) -> [Float] {
+        let width = frames / slots
+        return (0..<frames).map { n in
+            n / width == slot ? amplitude * Float(sin(2 * .pi * 440 * Double(n) / 48000)) : 0
+        }
+    }
+
+    /// Mat's ring on the Behringer, through real files: three stereo sources on
+    /// outputs 1-2, 2-3, 3-1. Every output must carry exactly two channels — the left
+    /// of its own source and the right of the one before it — and nothing else.
+    func testAStaggeredRingRoutesEveryChannelThroughTheBake() async throws {
+        let slots = 6
+        var sources: [URL] = []
+        for k in 0..<3 {
+            sources.append(try write([burst(slot: 2 * k, of: slots), burst(slot: 2 * k + 1, of: slots)], "ring\(k).wav"))
+        }
+        let routes = AudioRouting.stagger(sources.map { AudioRoute(file: $0.path, output: 1) })
+        var facts: [AudioFacts?] = []
+        for s in sources { facts.append(try await AudioBake.analyse(s)) }
+        let plan = AudioRouting.plan(routes: routes, facts: facts)
+        XCTAssertTrue(plan.mixed)
+        XCTAssertTrue(plan.problems.isEmpty, "\(plan.problems)")
+        let out = dir.appendingPathComponent("ring.wav")
+        try await AudioBake.bake(plan: plan, sources: sources, to: out, preventClipping: plan.mixed)
+        let channels = try read(out).channels
+        XCTAssertEqual(channels.count, 3)
+
+        // output 1: source 0's left (slot 0) and source 2's right (slot 5, the wrap)
+        // output 2: source 0's right (slot 1) and source 1's left (slot 2)
+        // output 3: source 1's right (slot 3) and source 2's left (slot 4)
+        let expected = [[0, 5], [1, 2], [3, 4]]
+        let width = 48000 / slots
+        for output in 0..<3 {
+            for slot in 0..<slots {
+                let slice = Array(channels[output][slot * width ..< (slot + 1) * width])
+                if expected[output].contains(slot) {
+                    XCTAssertGreaterThan(rms(slice), 0.3, "output \(output + 1) should carry slot \(slot)")
+                } else {
+                    XCTAssertLessThan(rms(slice), 0.0003, "output \(output + 1) leaked slot \(slot)")  // −60 dB
+                }
+            }
+        }
+    }
+
+    /// T26. Two sources meeting in phase on one output reach the sum of their
+    /// amplitudes; the bake brings the whole mix inside full scale with ONE gain, so
+    /// an output that was never in danger is turned down by exactly the same amount.
+    /// That is what keeps the balance between speakers — the thing a ring is made of.
+    func testAMixThatWouldClipIsTurnedDownAsAWhole() async throws {
+        let hot = tone(440).map { $0 * 3.2 }            // 0.25 × 3.2 = 0.8
+        let quiet = tone(440).map { $0 * 2 }            // 0.5
+        let a = try write([hot], "hot-a.wav"), b = try write([hot], "hot-b.wav"), c = try write([quiet], "quiet.wav")
+        let routes = [AudioRoute(file: a.path, output: 1), AudioRoute(file: b.path, output: 1),
+                      AudioRoute(file: c.path, output: 2)]
+        var facts: [AudioFacts?] = []
+        for s in [a, b, c] { facts.append(try await AudioBake.analyse(s)) }
+        let plan = AudioRouting.plan(routes: routes, facts: facts)
+        XCTAssertTrue(plan.mixed)
+        let out = dir.appendingPathComponent("mixed.wav")
+        try await AudioBake.bake(plan: plan, sources: [a, b, c], to: out, preventClipping: plan.mixed)
+        let channels = try read(out).channels
+
+        let peak = { (x: [Float]) in x.map(abs).max() ?? 0 }
+        // 0.8 + 0.8 = 1.6, so the gain is 1/1.6 = 0.625.
+        XCTAssertEqual(Double(peak(channels[0])), 1.0, accuracy: 0.01, "brought to full scale, not beyond")
+        XCTAssertEqual(Double(peak(channels[1])), 0.5 * 0.625, accuracy: 0.01, "the same gain, so balance holds")
+    }
+
+    func testAMixThatWouldNotClipIsLeftAlone() async throws {
+        let a = try write([tone(440)], "soft-a.wav"), b = try write([tone(440)], "soft-b.wav")
+        let routes = [AudioRoute(file: a.path, output: 1), AudioRoute(file: b.path, output: 1)]
+        var facts: [AudioFacts?] = []
+        for s in [a, b] { facts.append(try await AudioBake.analyse(s)) }
+        let plan = AudioRouting.plan(routes: routes, facts: facts)
+        let out = dir.appendingPathComponent("soft.wav")
+        try await AudioBake.bake(plan: plan, sources: [a, b], to: out, preventClipping: plan.mixed)
+        // 0.25 + 0.25 summed in phase, nowhere near full scale: no gain at all.
+        XCTAssertEqual(Double((try read(out).channels[0]).map(abs).max() ?? 0), 0.5, accuracy: 0.01)
+    }
 }

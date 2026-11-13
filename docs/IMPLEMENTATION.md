@@ -443,8 +443,8 @@ points to the beta under its download link (b665283), a commit made directly on
 (a test merge is clean). Both that note and the `beta` README's notice come out when
 sound merges to main.
 
-Built from § v5. `swift test`: 208 tests, 1 skipped (the loopback, which needs a
-named device).
+Built from § v5. `swift test`: 220 tests, 1 skipped (the loopback, which needs a
+named device; count checked 2026-11-12).
 
 **First run of the real app (2026-11-05, MacBook Pro, dev build, sound forced to
 the virtual Pro Tools Audio Bridge 16, levels -50 dBFS tones and -40 dBFS clicks,
@@ -484,6 +484,75 @@ in `AudioBakeTests`. Found and fixed: routes for a Mac composed ahead were never
 from its subfolder, and a bake could run twice, once during the show. Not checked: by
 ear; the pan sliders by hand (drawn, not dragged); a real work's level; whether a
 player's pan edit reaches the conductor outside a test.
+
+### v5: six channels on the Behringer at uni (Mat, reported 2026-11-12)
+First time sound has left a real interface. Mat ran a dev build on the
+university's Behringer: **all six outputs correct**, each source on its own
+output. That retires two of the NOT-checked lines above: sound had never been
+measured leaving hardware, and nobody had heard it.
+
+What this run does NOT settle, stated plainly because the targets turn on it:
+- **T23 (drift) is still open.** Short works only, and the test that matters is
+  length: a hardware crystal at this Mac's +8.67 ppm is a frame every 64 min.
+  Six correct outputs for a short piece cannot show it.
+- **Sound against picture was not tested** (Mat: video sync not tested), so T22
+  on real hardware is unchanged.
+- Crosstalk was judged by listening, not measured, so T19's −60 dB figure
+  still rests on `AudioBakeTests` and the virtual device.
+- Not in this run: two Macs, the fold-down by ear, student exports.
+
+## v6: getting sound in, after the first interface run (2026-11-12, released as pre-release 0.4.0-beta.2 on 2026-11-13)
+Built from § v6, written this session from Mat's four findings on the Behringer.
+`swift build && swift test`: **232 tests, 1 skipped (the loopback), 0 failures**
+(220 before; 12 new).
+
+- **Load a selection or folders.** Add › "Sound files or folders…" takes several
+  files at once, and a folder contributes the sound files directly inside it (not
+  its subfolders: those mean another Mac's sound). Each takes the next free output
+  from this Mac's first output.
+- **First output, per Mac.** "New sound starts at output N" beside Interface,
+  default 1, stored in UserDefaults like the interface and Listen. A floor on new
+  allocation only — it never moves a route already set, so the Sound table keeps
+  saying which speaker really gets what. A file named `_N` still asks for N.
+- **Staggered ring.** "Stagger pairs" gives the sources in table order the pairs
+  (o, o+1), (o+1, o+2) … wrapping the last back to the first output: Mat's
+  1-2, 2-3, 3-4, 4-5, 5-6, 6-1, or 3-4 … 8-3 on the Behringer. `AudioRoute.second`
+  stores the wrap explicitly (optional, so older shows still read).
+- **Mixing instead of a veto.** § v5's "two sources on one output blocks Present"
+  is gone: shared outputs are summed, each row says which outputs it shares, and
+  `Plan.mixed` makes the full bake use the peak normalisation that until now only
+  the fold-down used. The old test asserting the veto was inverted, deliberately.
+- **A player's floor travels with its inventory.** Found by the teaching review,
+  not by a test: a conductor invents a player's routes, so a player with a
+  Behringer had its new sound allocated from output 1 — its master pair — because
+  the floor was a purely local setting. `Inventory.firstOutput` (optional, so older
+  players still decode) now carries it, and a Mac's own report beats the
+  conductor's assumption.
+- Automatic is untouched: a stereo file read as real stereo still spreads to N+1
+  only when N+1 is free, so a student's array of stereo exports behaves as before.
+  A ring is something a person asks for.
+
+**PROVE, `proofs/stagger-ring-probe.swift`** (new): the ring survived — every
+output carried exactly its two channels, the wrap closed the ring, strays at
+−176 dB, one downward gain brought the peak to exactly 1.0. It also killed the
+prediction written into it: I expected independent material to need no gain and
+correlated material to need several dB, so that the level cost would depend on the
+work. **Both rings peaked at 1.400 and both needed −2.9 dB** — two sine tones of
+any frequencies drift through every phase relation, so the peak lands on the
+arithmetic sum either way. The cost of a ring is therefore predictable from source
+level and how many sources share an output (about 3 dB for two at 0.7, 6 dB at full
+scale), not from the material, which is what the Sound table now tells a person.
+
+**Not done, and why:** Mat's fifth request, **a sound work or a series of sound
+works with no video**. It needs a decision I don't have — what the displays do
+while one plays — and it touches the work model, not the sound model
+(`AppModel.scan`'s `guard !videos.isEmpty`, `ownWorks`, `displaysNeeded`;
+`Playlist.length` already counts sound, and `Playback` already runs a Mac with no
+screens, so the player side is largely there).
+
+**Not run in the app.** Everything here is tested in `swift test` and the probe;
+nothing has been clicked, and the ring has never been heard. The real test is
+Mat's six-pair work through the Behringer, by ear.
 
 ## Open questions
 - ~~Is building a 2000-segment composition fast enough?~~ Answered by

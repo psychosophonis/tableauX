@@ -1001,6 +1001,109 @@ second for 30 minutes, arrival against schedule. Bounded meanwhile: each work
 builds a new player, so a 10-minute work could gain about 5 ms; only long "until
 moved on" loops build up, and those could re-sync at the loop point.
 
+## v6: getting sound in, after the first interface run (Mat, 2026-11-12)
+
+<!-- [claude] Written from Mat's first run of sound on a real interface: the
+Behringer at the university, a dev build, six outputs, short works, sound only.
+Marked (Mat) where this is his finding or decision; the rest is my proposal for
+him to confirm. Three of these contradict § v5, which was written before any
+hardware had been used; where they do, this section supersedes it. -->
+
+### What the run showed
+- **Six outputs, all correct (Mat).** Each source reached its own output. The
+  first evidence of § v5 working outside a virtual device.
+- **Adding files one at a time is too slow (Mat):** "annoying to 'Add File' for
+  each channel. I want to load a folder or selection of files."
+- **Output 1-2 is not free (Mat):** on the Behringer the first two outputs are a
+  master stereo pair, so a work uses 3-8. § v5's allocation starts at output 1,
+  which puts a work's first file on the master pair.
+- **A ring of speakers could not be expressed (Mat):** a work of six stereo pairs
+  wanted the pairs STAGGERED — 1-2, 2-3, 3-4, 4-5, 5-6, 6-1 — each file spread
+  between two adjacent speakers, the last wrapping round to the first. § v5
+  refuses it twice: a stereo source spreads to N+1 only when N+1 is free (it
+  sums to one speaker otherwise), and two sources on one output is a problem
+  that blocks Present.
+
+### Loading a selection or a folder (Mat)
+Add › "Sound files…" takes several files at once, and folders: a chosen folder
+contributes the sound files directly inside it. Files are added in natural name
+order, each taking the next free output at or above this Mac's first output. A
+name ending `_N` still asks for output N, as § Getting sound in says.
+
+### First output, per Mac (Mat's Behringer)
+A number beside Interface, default 1. Automatic allocation never assigns below
+it, so a device whose 1-2 is a monitor or master pair can be told to start at 3.
+
+- It is **a floor on new allocation, not a remapping.** A route already set keeps
+  its output, and nothing is shifted at play time. [claude] The alternative —
+  storing 1-6 and adding an offset when playing — would make the Sound table lie
+  about which speaker gets what, and the table is the only check a person has on
+  these decisions.
+- It is stored **per Mac** (UserDefaults, beside the chosen interface and
+  Listen), not in the show. [claude] Same reason as those two: it describes the
+  hardware in the room, so a show or a kit must not carry it to another Mac.
+- [claude] But it **travels with a player's inventory** (`Inventory.firstOutput`),
+  because the conductor is what invents a player's routes and cannot know what
+  that room's interface reserves. A Mac's own report beats the conductor's
+  assumption; a player that doesn't report one is read as 1. Without this, a
+  player with a Behringer has its sound placed on its master pair.
+
+### Pairs may overlap, and may wrap (Mat)
+- A source set to **Pair** takes its output and the next **whether or not another
+  source is there**. Overlap is no longer refused.
+- A route may name its **second output** explicitly, which is how 6-1 is written.
+  [claude] Stored, not inferred: nothing in a work's routes says where the ring
+  ends (is output 6 the last speaker, or just the highest one this work uses?),
+  so a wrap worked out by guessing would move sound between works. An explicit
+  second output is also readable in the show file, like the rest of it.
+- **Stagger pairs**, a bulk action on a Mac's sources: take them in table order
+  and give them (o, o+1), (o+1, o+2) … from the first output, the last pair
+  wrapping to the first output. One action for the ring Mat wanted.
+- **Automatic is unchanged.** A two-channel source read as real stereo still
+  spreads to N and N+1 only when N+1 is free, and sums to one speaker when it
+  isn't. [claude] Automatic cannot tell a student's array of stereo exports (each
+  meant for one speaker) from a deliberate ring, and the cost of guessing wrong
+  differs: a wrong ring is a strange image, a wrong array leaks every file onto
+  its neighbour's speaker. So staggering stays something a person asks for.
+
+### Mixing on one output (Mat)
+Several sources on one output **sum at equal level**. This replaces § The bake's
+"Two sources on one output block Present", which was written when nothing wanted
+to mix.
+
+- The bake already does it: it accumulates into each output and already has
+  downward-only peak normalisation (§ Stereo fold-down › Level), built for the
+  fold-down. The full bake now uses that normalisation whenever any output
+  carries more than one source.
+- [claude] **The level cost is real and must be shown.** Summing is the one place
+  a routing choice changes how loud the work is: a ring of correlated material
+  peaks higher than a single file, so the one gain that keeps it inside full
+  scale turns the whole work down. Balance between speakers holds (one gain for
+  the whole mix), but the work gets quieter. The Sound table says which sources
+  share an output; `proofs/stagger-ring-probe.swift` measures how deep the gain
+  goes in the worst case.
+
+### Targets
+| # | Target | How it is checked |
+|---|--------|-------------------|
+| T25 | A staggered ring puts exactly the two channels it should on each output, nothing else above −60 dB | `proofs/stagger-ring-probe.swift`; `AudioRoutingTests` (the plan), `AudioBakeTests` (the file) |
+| T26 | A mix that would clip is turned down once, as a whole; one that wouldn't is untouched | `AudioBakeTests` |
+
+### Riskiest assumption, and its cheapest test
+That a ring of overlapping stereo pairs, summed this way, is **musically
+usable** — that the level after normalisation and the phantom image between each
+adjacent pair are what the work wants. No test in this project can answer that:
+it is a question about ears in a room, and the fold-down cannot stand in for it
+(§ Stereo fold-down: "It can't tell you about the room"). Cheapest real test:
+bake Mat's six-pair work and listen to it on the Behringer. The probe only rules
+out the engineering failures — wrong output, clipping, a gain so deep the idea
+is unusable.
+
+Still untested from § v5, and not addressed here: **T23**, whether sound holds to
+the host clock over hours on a real interface. The run was short. It remains the
+riskiest assumption in the sound work as a whole, and an unattended installation
+is what it would spoil.
+
 ## API Contracts (PlayerCore library)
 
 ```

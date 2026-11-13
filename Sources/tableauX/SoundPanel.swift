@@ -51,8 +51,15 @@ private struct MacSound: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Text(model.displayName(of: machine)).font(.subheadline.bold())
-                if isThisMac { devicePicker }
+                if isThisMac { devicePicker; firstOutputField }
                 addMenu
+                // [claude] v6: the ring Mat wanted on the Behringer and couldn't set
+                // by hand (§ v6 › Pairs may overlap, and may wrap). Only offered with
+                // something to arrange: on one source it would do nothing.
+                if routes.count > 1 {
+                    Button("Stagger pairs") { model.staggerPairs(on: machine) }
+                        .help("Spread each stereo source between two adjacent speakers, overlapping: outputs 1-2, 2-3, 3-4 … and the last pair back to the first. For a ring of speakers.")
+                }
                 Spacer()
             }
             if routes.isEmpty {
@@ -67,6 +74,15 @@ private struct MacSound: View {
             if sound.listenStereo, !routes.isEmpty { pans }
             if let state, isThisMac {
                 ForEach(state.plan.problems + state.plan.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
+                // [claude] v6: said as information, not a warning, because a ring is
+                // deliberate. It is here at all because mixing is the one routing
+                // choice that changes how loud the work is: the bake sets one gain
+                // from the loudest sum in it, so a person whose ring came out quieter
+                // can see the reason (§ v6 › Mixing on one output).
+                if state.plan.mixed {
+                    Text("Outputs that carry more than one source are mixed. If a sum would clip, the whole work is turned down to fit — about 3 dB for two loud sources — which keeps the balance between speakers.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 // What will actually play, not the full bake: on fold-down that bake
                 // is deliberately never made, so its status would never clear.
                 switch model.playState(work: model.selectedWork)?.status ?? state.status {
@@ -173,16 +189,33 @@ private struct MacSound: View {
                 }
             }
             if isThisMac {
-                Button("A sound file…") {
+                // [claude] v6, from Mat's Behringer run ("annoying to 'Add File' for
+                // each channel"): several files, or whole folders, in one choice.
+                // Folders are allowed because a work's sound usually arrives as one.
+                Button("Sound files or folders…") {
                     let p = NSOpenPanel()
                     p.allowedContentTypes = [.audio]
-                    if p.runModal() == .OK, let url = p.url {
-                        model.setRoutes(routes + [AudioRoute(file: url.path, output: nextOutput())], on: machine)
-                    }
+                    p.allowsMultipleSelection = true
+                    p.canChooseDirectories = true
+                    p.message = "Each file takes the next free output, from output \(model.sound.firstOutput)."
+                    if p.runModal() == .OK { model.addSources(p.urls, on: machine) }
                 }
             }
         }
         .fixedSize()
+    }
+
+    /// [claude] v6: the lowest output a work may use on this Mac's interface
+    /// (§ v6 › First output, per Mac). Mat's Behringer keeps 1-2 as a master pair.
+    /// It governs what the app ALLOCATES, not what is already set, so changing it
+    /// never moves a route a person has made — hence "New sound starts at", not
+    /// "Outputs start at".
+    private var firstOutputField: some View {
+        Stepper("New sound starts at output \(model.sound.firstOutput)",
+                value: Binding(get: { model.sound.firstOutput },
+                               set: { model.sound.firstOutput = max(1, $0) }), in: 1...64)
+            .fixedSize()
+            .help("On some interfaces the first outputs are a master or monitor pair (the Behringer at uni: outputs 1-2), so a work should start at 3. This only affects files added from now on; routes already set stay where they are.")
     }
 
     /// Set per Mac, so only this Mac's own interface can be chosen from here.
