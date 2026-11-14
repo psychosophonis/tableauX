@@ -989,7 +989,7 @@ surround... set it up locally before heading to the installation space."
 | T21 | Loops and repeats are sample-exact | `proofs/audio-bake-pipeline-probe.swift` (exact, virtual device) |
 | T22 | A video's sound stays with its picture: decoded sound lands at its true time | `AudioBakeTests`; `proofs/audio-decode-probe.swift` (0 offset: AAC and PCM, mp4 and mov, 44.1 and 48 kHz). Muxed vs baked playback on a real interface: lab |
 | T24 | A fold-down puts each output on its pan, and the mix never clips | `AudioRoutingTests`, `AudioBakeTests` (the file); app run on a virtual device |
-| T23 | Sound stays within `sync.tolerance` of show time for 8 h on the real interface | **Lab, not yet run:** `AudioLoopbackTests` on the Behringer with a cable (the test's header has the command). On the virtual device it reads 0.00 ppm, so that device can't test this |
+| T23 | Sound stays within `sync.tolerance` of show time for 8 h on the real interface | **Lab, not yet run:** `AudioLoopbackTests` on the Behringer with a cable. The procedure is `docs/LAB-TEST.md` § 6; the test's header comment governs the variables. On the virtual device it reads 0.00 ppm, so that device can't test this |
 
 ### Riskiest assumption, and its cheapest test
 That AVPlayer holds audio to the host clock on real hardware. A hardware device
