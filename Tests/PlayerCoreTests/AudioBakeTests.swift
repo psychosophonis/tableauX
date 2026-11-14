@@ -262,7 +262,7 @@ final class AudioBakeTests: XCTestCase {
         }
     }
 
-    /// Mat's ring on the Behringer, through real files: three stereo sources on
+    /// A staggered ring through real files: three stereo sources on
     /// outputs 1-2, 2-3, 3-1. Every output must carry exactly two channels — the left
     /// of its own source and the right of the one before it — and nothing else.
     func testAStaggeredRingRoutesEveryChannelThroughTheBake() async throws {

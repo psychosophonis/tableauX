@@ -18,7 +18,8 @@
 // WHAT IT TAUGHT (2026-11-05, MacBook Pro speakers, 90 s): FALSIFIED. +8.67 ppm, and
 // steady (every 15 s window read 8.67-8.68). That's a frame at 30 fps every 64 min,
 // or about 250 ms over 8 h.
-// Limits: this measures the speakers, not the Behringer, and a device's rate is a
+// Limits: this measures the Mac's own speakers, not an external interface, and a
+// device's rate is a
 // property of that device. It also shows the clocks differ, not that sound drifts:
 // AVPlayer might correct for it. That needs a test of what actually arrives, on real
 // hardware (Tests/PlayerCoreTests/AudioLoopbackTests.swift, target T23). Not yet run.

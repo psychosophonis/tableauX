@@ -5,10 +5,10 @@ here. Update it BEFORE you change behaviour, then make the code follow.
 
 ## Purpose
 
-tableauX: a macOS app that plays one video file per display, in sync, for a gallery or
-lab screen array (BCM116: a Mac mini driving three 4K displays). It replaces
-"one huge file stretched across a virtual display", which resamples the image
-and produces artefacts.
+tableauX: a macOS app that plays one video file per display, in sync, for a gallery
+or teaching screen array (the case it was first built for: one Mac driving three 4K
+displays). It replaces "one huge file stretched across a virtual display", which
+resamples the image and produces artefacts.
 
 Non-goals (v1): network sync between computers (planned: see "v3"
 below), projection warping or edge blending, playlists (see "v4"), editing.
@@ -183,7 +183,7 @@ Group { id: string, name: string }
 
 <!-- [claude] Drafted 2026-10-21 from Mat's ask: extend the single-machine
 sync to several Macs, server/client, as MultiScreener (2009) did well enough
-over university Wi-Fi; then: one app with client/server modes, every machine
+over a managed Wi-Fi network; then: one app with client/server modes, every machine
 playing its own displays (e.g. 6 screens off two MacBook Pros). Claude's
 proposals in it were confirmed by Mat on 2026-10-21, so this section is
 normative. Builds on v1; v2 is still a draft and v3 does not depend on it. -->
@@ -278,7 +278,7 @@ ShowFolder.isShowFolder(files:subfolders:) / .shows(in:) / .showToOpen(last:fold
   every player heard from in the last 10 s, from the clock socket.
 - Why state: a player that misses packets, joins late or restarts converges
   on the next one. A lost "Play" command would be lost for good, and UDP
-  does lose packets (0.2% on the uni Wi-Fi run).
+  does lose packets (0.2% on the managed Wi-Fi run).
 - Wire: 40 bytes, five little-endian UInt64: a magic word (`TBXSTATE` in
   ASCII), version, phase (0 stopped, 1 playing, 2 paused), start ns,
   pausedAt ns. The clock packet stays 32 bytes, so the size tells them apart
@@ -347,7 +347,7 @@ ShowFolder.isShowFolder(files:subfolders:) / .shows(in:) / .showToOpen(last:fold
   machine has every file it needs (name, size, and a hash) and blocks Play
   otherwise, as missing files do now.
 - Discovery by Bonjour on the local network, with a typed-in address as
-  fallback: university Wi-Fi often blocks Bonjour, and some networks stop
+  fallback: managed networks (campus, venue, office) often block Bonjour, and some stop
   devices reaching each other at all ("client isolation").
 - If a player loses the conductor, it keeps playing on its last clock
   estimate and rejoins when it can; the show doesn't stop.
@@ -364,11 +364,11 @@ ShowFolder.isShowFolder(files:subfolders:) / .shows(in:) / .showToOpen(last:fold
 That the target network gives clock estimates good to a few milliseconds.
 A simulation can't answer this, because the answer depends on that network's
 real delays. The cheapest real test is a probe on two MacBooks on the
-university Wi-Fi: first check they can reach each other (T10), then log the
+a managed Wi-Fi network: first check they can reach each other (T10), then log the
 offset estimate over 10 minutes (T11). Only if that holds is the rest worth
 building.
 
-Result (2026-10-21, two MacBooks on the university Wi-Fi, ~9 min): T10 pass
+Result (2026-10-21, two MacBooks on a managed Wi-Fi network, ~9 min): T10 pass
 (0.2% packets lost); T11 pass, filtered estimate steady to 0.28 ms (raw
 samples 15.2 ms); clock drift −12 ppm. Replayed through `ClockEstimator` in
 `ClockReplayTests`: 0.27 ms, and 0.40 ms worst across a simulated 300 s
@@ -660,7 +660,7 @@ possible, just work."
   only by notarisation, Mat's call) and the Local Network Allow (always
   asked; discovery waits for it).
 - **Untested assumptions, with their cheapest tests:** Bonjour on the
-  university network (`dns-sd -R test _tableaux._tcp local 47801` on one
+  a managed network (`dns-sd -R test _tableaux._tcp local 47801` on one
   Mac, `dns-sd -B _tableaux._tcp` on another); translocation resolved on a
   fresh Mac (download a zip of the folder, unzip, open, Open Anyway).
 
@@ -852,9 +852,9 @@ logging each load time and the process's memory. It needs no playlist code.
 ## v5: multichannel sound (Mat, 2026-11-05)
 
 <!-- [claude] From Mat: multiscreen works often have multichannel sound in set
-configurations (stereo per screen, a surround array). The university's Behringer
-interface currently needs a DAW to assign channels, "an unnecessary complication
-for installs". Marked (Mat) where Mat decided or confirmed; the rest is Claude's
+configurations (stereo per screen, a surround array). Getting a multi-output
+interface to take a channel per file currently needs a DAW, "an unnecessary
+complication for installs". Marked (Mat) where Mat decided or confirmed; the rest is Claude's
 proposal, for Mat to confirm. Sending files between Macs is left out for now
 (Mat: "don't worry about that for now"): files reach a Mac the way video does. -->
 
@@ -957,7 +957,7 @@ Aim (Mat): "test it on a stereo system then plug in the array and make it work i
 surround... set it up locally before heading to the installation space."
 - **Listen, a switch per Mac:** Full outputs, or Stereo fold-down. [claude] It is a
   switch, not automatic, because an interface's output count doesn't say what's
-  connected: an Apollo reports 10 outputs with monitors on 1-2. It is stored per Mac,
+  connected: a desk interface may report 10 outputs with monitors on 1-2. It is stored per Mac,
   like the interface, so a home setting can't reach the gallery in a show or a kit.
 - **Nothing about the work changes.** Fold-down is a second bake, on outputs 1-2. The
   routes and the full bake are untouched, so switching back restores the work.
@@ -989,22 +989,23 @@ surround... set it up locally before heading to the installation space."
 | T21 | Loops and repeats are sample-exact | `proofs/audio-bake-pipeline-probe.swift` (exact, virtual device) |
 | T22 | A video's sound stays with its picture: decoded sound lands at its true time | `AudioBakeTests`; `proofs/audio-decode-probe.swift` (0 offset: AAC and PCM, mp4 and mov, 44.1 and 48 kHz). Muxed vs baked playback on a real interface: lab |
 | T24 | A fold-down puts each output on its pan, and the mix never clips | `AudioRoutingTests`, `AudioBakeTests` (the file); app run on a virtual device |
-| T23 | Sound stays within `sync.tolerance` of show time for 8 h on the real interface | **Lab, not yet run:** `AudioLoopbackTests` on the Behringer with a cable. The procedure is `docs/LAB-TEST.md` § 6; the test's header comment governs the variables. On the virtual device it reads 0.00 ppm, so that device can't test this |
+| T23 | Sound stays within `sync.tolerance` of show time for 8 h on the real interface | **Not yet run:** `AudioLoopbackTests` on a hardware interface with a loopback cable. The procedure is `docs/LAB-TEST.md` § 6; the test's header comment governs the variables. On the virtual device it reads 0.00 ppm, so that device can't test this |
 
 ### Riskiest assumption, and its cheapest test
 That AVPlayer holds audio to the host clock on real hardware. A hardware device
 runs on its own crystal (this Mac's speakers: +8.67 ppm, a frame every 64 min,
 250 ms over 8 h, `proofs/audio-clock-probe.swift`). The virtual device can't show
 this, and the drift check reads the player's timebase, so it may not notice either.
-Cheapest test: a cable from a Behringer output to one of its inputs, clicks every
-second for 30 minutes, arrival against schedule. Bounded meanwhile: each work
+Cheapest test: a cable from one of the interface's outputs to the input of the
+same number, clicks every second for 30 minutes, arrival against schedule. Bounded meanwhile: each work
 builds a new player, so a 10-minute work could gain about 5 ms; only long "until
 moved on" loops build up, and those could re-sync at the loop point.
 
 ## v6: getting sound in, after the first interface run (Mat, 2026-11-12)
 
-<!-- [claude] Written from Mat's first run of sound on a real interface: the
-Behringer at the university, a dev build, six outputs, short works, sound only.
+<!-- [claude] Written from Mat's first run of sound on a real interface: a dev
+build, a six-output interface whose first two outputs are its master pair, short
+works, sound only.
 Marked (Mat) where this is his finding or decision; the rest is my proposal for
 him to confirm. Three of these contradict § v5, which was written before any
 hardware had been used; where they do, this section supersedes it. -->
@@ -1014,8 +1015,8 @@ hardware had been used; where they do, this section supersedes it. -->
   first evidence of § v5 working outside a virtual device.
 - **Adding files one at a time is too slow (Mat):** "annoying to 'Add File' for
   each channel. I want to load a folder or selection of files."
-- **Output 1-2 is not free (Mat):** on the Behringer the first two outputs are a
-  master stereo pair, so a work uses 3-8. § v5's allocation starts at output 1,
+- **Output 1-2 is not free (Mat):** on that interface the first two outputs are
+  a master stereo pair, so a work uses 3-8. § v5's allocation starts at output 1,
   which puts a work's first file on the master pair.
 - **A ring of speakers could not be expressed (Mat):** a work of six stereo pairs
   wanted the pairs STAGGERED — 1-2, 2-3, 3-4, 4-5, 5-6, 6-1 — each file spread
@@ -1030,7 +1031,7 @@ contributes the sound files directly inside it. Files are added in natural name
 order, each taking the next free output at or above this Mac's first output. A
 name ending `_N` still asks for output N, as § Getting sound in says.
 
-### First output, per Mac (Mat's Behringer)
+### First output, per Mac (Mat)
 A number beside Interface, default 1. Automatic allocation never assigns below
 it, so a device whose 1-2 is a monitor or master pair can be told to start at 3.
 
@@ -1046,7 +1047,7 @@ it, so a device whose 1-2 is a monitor or master pair can be told to start at 3.
   because the conductor is what invents a player's routes and cannot know what
   that room's interface reserves. A Mac's own report beats the conductor's
   assumption; a player that doesn't report one is read as 1. Without this, a
-  player with a Behringer has its sound placed on its master pair.
+  player whose interface reserves 1-2 has its sound placed on that pair.
 
 ### Pairs may overlap, and may wrap (Mat)
 - A source set to **Pair** takes its output and the next **whether or not another
@@ -1095,7 +1096,7 @@ usable** — that the level after normalisation and the phantom image between ea
 adjacent pair are what the work wants. No test in this project can answer that:
 it is a question about ears in a room, and the fold-down cannot stand in for it
 (§ Stereo fold-down: "It can't tell you about the room"). Cheapest real test:
-bake Mat's six-pair work and listen to it on the Behringer. The probe only rules
+bake a six-pair work and listen to it on the array itself. The probe only rules
 out the engineering failures — wrong output, clipping, a gain so deep the idea
 is unusable.
 

@@ -10,7 +10,7 @@ Mac's interface, a screen's video sound can be routed too, and Stereo fold-down
 lets you check surround work on two speakers. Sound files and folders load in
 one selection, a Mac can reserve its first outputs, and stereo pairs can
 overlap and wrap around a ring of speakers. It's for testing, not for shows:
-six outputs of a Behringer interface have played a short sound work correctly,
+a six-output interface has played a short sound work correctly, output by output,
 but sound against picture, and over hours, is untested. Check Interface and turn
 your monitors down before playing: it uses the Mac's default output at full
 level.
@@ -149,9 +149,9 @@ buttons at the top:
 ### Multichannel sound
 
 **Beta:** this section describes `0.4.0-beta.2`, which is not the main download. Get
-it from [Releases](../../releases). Six outputs of a Behringer interface have now
-played a short sound work correctly; sound against picture, and over hours, has not
-been tested.
+it from [Releases](../../releases). A six-output interface has now played a short
+sound work correctly, output by output; sound against picture, and over hours, has
+not been tested.
 
 No DAW needed: put a work's sound files in an `audio` folder inside its folder,
 on the Mac that plays them, and name each for its output:
@@ -171,10 +171,10 @@ there too. tableauX combines them into one prepared file in the background, and
 Present waits for it.
 
 **Getting the files in:** **Add** › *Sound files or folders…* takes several files,
-or a whole folder, at once; each takes the next free output. If your interface keeps
-its first outputs for a master or monitor pair — the Behringer at uni uses 1-2 that
-way — set **New sound starts at output** to the first one you can really use, and
-new files are placed from there. Routes you have already set never move.
+or a whole folder, at once; each takes the next free output. Many interfaces keep
+their first outputs for a master or monitor pair, so if yours begins at 3, set
+**New sound starts at output** to the first one you can really use and new files
+are placed from there. Routes you have already set never move.
 
 **A ring of speakers:** **Stagger pairs** spreads each stereo source between two
 adjacent speakers, overlapping — outputs 1-2, 2-3, 3-4 … and the last pair back to

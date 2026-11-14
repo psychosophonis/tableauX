@@ -1,17 +1,17 @@
-# Lab test: tableauX on the BCM116 Mac mini
+# Hardware test sheet: a real display array, a real audio interface
 
 Some things can only be tested on real hardware: the three-display array for
 the picture (§ 3-4), and an audio interface for the sound (§ 5-6). This sheet is
 for whoever runs them. The picture tests take about 30 minutes; the sound drift
 test takes another 30, most of it waiting. Please send the results (the filled-in
-tables, the photos and the logs) back to Mat.
+tables, the photos and the logs) back to whoever asked you to run this.
 
 What's being tested, and why it can't be tested anywhere else:
 
 | Target (docs/architecture.md) | Question | Why only here |
 |---|---|---|
 | T6 | Do the three displays show the same frame at the same moment? | Each display refreshes on its own schedule; a laptop has one display. |
-| T4 | Does the Mac mini play three 4K videos smoothly? | Decoding speed depends on this machine's chip. |
+| T4 | Does the machine play three 4K videos smoothly? | Decoding speed depends on this machine's chip. |
 | T22 | Does the sound stay with the picture? | Needs an interface and speakers; a virtual device has no picture to check against. |
 | T23 | Does the sound hold to the host clock over hours? | A real interface runs on its OWN crystal, which drifts against the Mac's. A virtual device shares the Mac's clock and reads 0.00 ppm, so it cannot answer this. |
 
@@ -19,7 +19,7 @@ What's being tested, and why it can't be tested anywhere else:
 
 | | |
 |---|---|
-| Mac mini model and chip (Apple menu → About This Mac) | |
+| Mac model and chip (Apple menu → About This Mac) | |
 | macOS version | |
 | Each display: model, connection (HDMI / Thunderbolt / USB-C) | |
 | Each display's resolution setting (System Settings → Displays) | |
@@ -114,8 +114,8 @@ Works/Smith/
     rear_5.wav       output 5
 ```
 
-If the interface reserves its first outputs — a Behringer's 1-2 are its master
-stereo pair — set **New sound starts at output N** before adding files, and new
+Many interfaces reserve their first outputs for a master or monitor pair. If
+yours does, set **New sound starts at output N** before adding files, and new
 sound is allocated above that floor.
 
 1. Open a work that has both video and an `audio` folder. Check the **Sound**
@@ -151,15 +151,15 @@ that error, in parts per million — 1 ppm is one sample in a million, about
 1. Patch **one cable from output 1 to input 1** on the interface — an output and
    the input of the *same number*, since that is the pairing the test assumes.
 2. `TABLEAUX_LOOPBACK_DEVICE` takes **any part of the device's name** as Audio
-   MIDI Setup shows it, not its UID: `"UMC"` finds a Behringer UMC. A name that
-   matches nothing fails with `no device matching <name>`, without listing what
-   it did find, so check the spelling in Audio MIDI Setup first.
+   MIDI Setup shows it, not its UID — a distinctive few letters are enough. A
+   name that matches nothing fails with `no device matching <name>`, without
+   listing what it did find, so check the spelling in Audio MIDI Setup first.
 3. `TABLEAUX_LOOPBACK_OUTPUTS` must name the outputs actually patched — it
    defaults to `1,2,5,9`, which is right for a 16-channel virtual device and
    wrong for one cable. In Terminal, in the project folder:
 
    ```
-   TABLEAUX_LOOPBACK_DEVICE="UMC" \
+   TABLEAUX_LOOPBACK_DEVICE="<part of the device name>" \
    TABLEAUX_LOOPBACK_OUTPUTS=1 \
    TABLEAUX_LOOPBACK_SECONDS=1800 \
    caffeinate -i swift test --filter AudioLoopback

@@ -89,7 +89,7 @@ final class AudioRoutingTests: XCTestCase {
     }
 
     /// [claude] v6 REPLACES the v5 rule this test used to assert (two sources on one
-    /// output blocks Present). Mat's ring on the Behringer is made of shared outputs,
+    /// output blocks Present). A staggered ring is made entirely of shared outputs,
     /// so sharing is now mixed and merely reported. Kept as a test, inverted, because
     /// the change of rule is the thing worth pinning down.
     func testTwoSourcesOnOneOutputAreMixedAndSaidSo() {
@@ -112,7 +112,7 @@ final class AudioRoutingTests: XCTestCase {
 
     // MARK: v6 — the staggered ring (§ v6 › Pairs may overlap, and may wrap)
 
-    /// Mat's work on the Behringer: six stereo pairs on 1-2, 2-3, 3-4, 4-5, 5-6, 6-1.
+    /// The case this was built for: six stereo pairs on 1-2, 2-3, 3-4, 4-5, 5-6, 6-1.
     func testAStaggeredRingPutsTwoSourcesOnEveryOutput() {
         let ring = AudioRouting.stagger((1...6).map { route($0) })
         XCTAssertEqual(ring.map(\.output), [1, 2, 3, 4, 5, 6])
@@ -133,7 +133,9 @@ final class AudioRoutingTests: XCTestCase {
         XCTAssertEqual(p.feeds.filter { $0.output == 1 }.map(\.source).sorted(), [0, 5], "the wrap closes the ring")
     }
 
-    func testStaggerFromTheBehringersFirstFreeOutput() {
+    /// An interface that reserves 1-2 for a master pair: the ring must start at 3
+    /// and close on 3, not on 1.
+    func testStaggerFromTheFirstUsableOutputAboveAReservedPair() {
         let ring = AudioRouting.stagger((1...6).map { route($0) }, from: 3)
         XCTAssertEqual(ring.map(\.output), [3, 4, 5, 6, 7, 8])
         XCTAssertEqual(ring.last?.second, 3, "the ring closes on the output it started from, not on 1")
@@ -186,7 +188,7 @@ final class AudioRoutingTests: XCTestCase {
     /// A player's own floor must win over the conductor's, because the conductor
     /// invents a player's routes and knows nothing about that room's interface.
     /// Found by the teaching review: before `Inventory.firstOutput` existed, a player
-    /// with a Behringer had its sound placed on outputs 1-2, its master pair.
+    /// whose interface reserves 1-2 had its sound placed on that master pair.
     func testAPlayersOwnFirstOutputBeatsTheConductors() throws {
         let inv = Inventory(machine: "Gallery", displays: 1,
                             folders: ["W": [InventoryFile(name: "W_1.mp4", duration: 10)]],
@@ -204,7 +206,7 @@ final class AudioRoutingTests: XCTestCase {
 
     func testNewSoundStartsAtTheMacsFirstOutput() throws {
         let r = try XCTUnwrap(AudioScan.routes(existing: nil, folder: "W", names: ["a.wav", "b.wav"], firstOutput: 3))
-        XCTAssertEqual(r.map(\.output), [3, 4], "1-2 is the Behringer's master pair")
+        XCTAssertEqual(r.map(\.output), [3, 4], "1-2 is reserved as the interface's master pair")
         // A name that asks for an output explicitly is still honoured: the floor
         // governs guesses, not what a person wrote on the file.
         let numbered = try XCTUnwrap(AudioScan.routes(existing: nil, folder: "W", names: ["x_1.wav", "c.wav"], firstOutput: 3))
@@ -463,27 +465,27 @@ final class AudioRoutingTests: XCTestCase {
     // MARK: Device
 
     private let speakers = AudioOutputs.Device(uid: "s", name: "Speakers", outputs: 2)
-    private let behringer = AudioOutputs.Device(uid: "b", name: "Behringer", outputs: 10)
+    private let tenOut = AudioOutputs.Device(uid: "b", name: "Ten-output interface", outputs: 10)
     private let bridge = AudioOutputs.Device(uid: "v", name: "Bridge", outputs: 16, isVirtual: true)
 
     func testPickUsesTheDefaultOutputIfItIsBigEnough() {
-        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, behringer], chosen: nil, defaultUID: "b", needed: 8), behringer)
-        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, behringer], chosen: nil, defaultUID: "s", needed: 2), speakers)
+        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, tenOut], chosen: nil, defaultUID: "b", needed: 8), tenOut)
+        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, tenOut], chosen: nil, defaultUID: "s", needed: 2), speakers)
     }
 
     /// The likely install: the interface is plugged in, the default is still the speakers.
     func testPickFindsTheOnlyRealInterfaceBigEnoughAndIgnoresVirtualOnes() {
-        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, behringer, bridge], chosen: nil, defaultUID: "s", needed: 8), behringer)
+        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, tenOut, bridge], chosen: nil, defaultUID: "s", needed: 8), tenOut)
         XCTAssertNil(AudioOutputs.pick(devices: [speakers, bridge], chosen: nil, defaultUID: "s", needed: 8))
     }
 
     func testPickDoesNotGuessBetweenInterfaces() {
         let other = AudioOutputs.Device(uid: "o", name: "Other", outputs: 16)
-        XCTAssertNil(AudioOutputs.pick(devices: [speakers, behringer, other], chosen: nil, defaultUID: "s", needed: 8))
+        XCTAssertNil(AudioOutputs.pick(devices: [speakers, tenOut, other], chosen: nil, defaultUID: "s", needed: 8))
     }
 
     func testAChosenDeviceWinsIfConnectedAndIsIgnoredIfNot() {
-        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, behringer], chosen: "s", defaultUID: "b", needed: 8), speakers)
-        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, behringer], chosen: "gone", defaultUID: "b", needed: 8), behringer)
+        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, tenOut], chosen: "s", defaultUID: "b", needed: 8), speakers)
+        XCTAssertEqual(AudioOutputs.pick(devices: [speakers, tenOut], chosen: "gone", defaultUID: "b", needed: 8), tenOut)
     }
 }

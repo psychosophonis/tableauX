@@ -1,6 +1,6 @@
 // clock-probe.swift — falsification probe for v3's network clock (Stage 0a).
 //
-// IDEA AT RISK: over the network the show will really use (university Wi-Fi),
+// IDEA AT RISK: over the network the show will really use (a managed Wi-Fi network,
 // one Mac can estimate another Mac's clock with an NTP-style timestamp
 // exchange, steady to within 5 ms for 95% of the time (target T11), once the
 // estimate keeps only the fastest round trips. And, before that, that two Macs

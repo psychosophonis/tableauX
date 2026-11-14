@@ -3,13 +3,13 @@
 A human-maintained scratchpad. The real source of truth is the test suite;
 this file is just a quick map of where things stand.
 
-## Handoff (2026-10-21, from the BCM116 course-site session)
+## Handoff (2026-10-21, from the course-site session this started in)
 
-Started in the ImmersiveInter (BCM116 site) session; moved here so the site
+Started in a course-site session; moved here so the site
 work can continue separately. Read `docs/architecture.md` first: it is the spec,
 with targets T1–T6.
 
-**Why this exists.** The BCM116 lab has a Mac mini driving three 4K displays
+**Why this exists.** The teaching lab this began for has a Mac driving three 4K displays
 directly. The current playback is a hacky app that shows a 3 × 4K work at 16:9
 and then pushes it to 16:3, with visible artefacts (non-uniform resampling).
 VLC was abandoned because of how macOS handles the displays. Mat wants: sync in
@@ -91,7 +91,7 @@ Risk order: the stages that could kill the idea come first.
 
 | Stage | Work | Done when | Status |
 |---|---|---|---|
-| 0a | `proofs/clock-probe.swift` on Mat's two MacBooks on uni Wi-Fi | T10 (reachable), T11 (steady ≤ 5 ms). Gates 2–4. | **done 2026-10-21: T10 pass, T11 pass (0.28 ms)**; see below |
+| 0a | `proofs/clock-probe.swift` on Mat's two MacBooks on a managed Wi-Fi network | T10 (reachable), T11 (steady ≤ 5 ms). Gates 2–4. | **done 2026-10-21: T10 pass, T11 pass (0.28 ms)**; see below |
 | 0c | Lab run on the Mac mini (docs/LAB-TEST.md) | T4, T6 | **done 2026-10-21: full checklist run by Mat, T4 and T6 pass** |
 | 1 | Clock maths in PlayerCore: `ClockEstimator`, `SyncMath.correction` | unit tests; replay of 0a's real CSV | **done** (10 tests + 3 replay tests, mutation-checked) |
 | 1b | Show format with machines (one video per display) | ShowFile tests | **done 2026-10-21**: show v2 (`machines`, `sync`), v1 refused; tolerance + grace in the drift check; see below |
@@ -107,7 +107,7 @@ Risk order: the stages that could kill the idea come first.
 | P3a | State carries the work index: → / ← on the conductor, players follow | T17 | **built 2026-10-22** `[claude]` (build 0.3.3): ShowState 48 bytes (1 new test); not yet run across Macs |
 | P3b | TCP link: inventories → conductor's playlist + lengths → players; file check | T16, T17 | **built 2026-10-22** `[claude]` (build 0.3.4): 10 new tests; loopback checks both ways (see notes); not yet run across Macs |
 | P4a | Conductor sets every Mac's screens from their reported files | Mat: "work entirely on the conductor" | **built 2026-10-22** `[claude]` (build 0.3.5); loopback screenshot found and fixed a bug (one-machine show lost the conductor's part when a player joined; 2 new tests) |
-| P4b | Zero setup: `tableauX` folder (beside the app first), role from the folder, Bonjour discovery | Mat: send the app + a folder and it "just works" | **built 2026-10-22** `[claude]` (build 0.3.6): 6 new tests; run on this Mac (see notes); Bonjour on the uni network and translocation on a fresh Mac untested |
+| P4b | Zero setup: `tableauX` folder (beside the app first), role from the folder, Bonjour discovery | Mat: send the app + a folder and it "just works" | **built 2026-10-22** `[claude]` (build 0.3.6): 6 new tests; run on this Mac (see notes); Bonjour on a managed network and translocation on a fresh Mac untested |
 | P4c | Test show packaged with the app (Mat: "for me, and for testing") | `scripts/make-test-show.sh` | **built 2026-10-22** `[claude]`: `dist/tableauX-0.3.6-test.zip` (10 MB): "Test conductor" + "Test player" folders; 2 works (red 12 s, blue 8 s) × 3 screens, count = seconds.frame, white flash each second. Conductor kit opened on this Mac: role and show from its folder, Play enabled |
 | P4d | Library: Works/ pool + Shows/ playlists; show menu; New show (all works); Add from library; conductor switches, players follow | Mat: many shows in one app, works movable between shows | **built 2026-10-22** `[claude]` (build 0.3.10): 5 new tests; kit run (see notes) |
 | P4e | Preview: the whole tableau in one window, a row per Mac | Mat: "test my shows on a single screen" | **built 2026-10-22** `[claude]` (build 0.3.12): 2 new tests; preview run of a 2-Mac (2 + 3 screens) show and a real-show regression run (see notes) |
@@ -123,7 +123,7 @@ through a dropout. Mutations checked: trusting the latest sample instead of
 the fastest fails 2 tests; ignoring drift fails the dropout test. Nothing in
 the app uses this yet.
 
-Stage 0a result (2026-10-21, Mat's two MacBooks, university Wi-Fi, ~9 min at
+Stage 0a result (2026-10-21, Mat's two MacBooks, a managed Wi-Fi network, ~9 min at
 20/s; recording in `Tests/clock-probe-1792559249.csv`):
 - T10 pass: 10,618 of 10,638 replies (0.2% lost).
 - Round trip: median 6.2 ms, 95% 41.4 ms, max 1,350 ms (stalls do happen).
@@ -295,7 +295,7 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
     clock on 192.168.1.46, sent its inventory, took the playlist, reported
     the missing file; rediscovered it after it closed.
   To check on real Macs: discovery after clicking Allow; Bonjour on the
-  uni network; translocation on a fresh Mac.
+  a managed network; translocation on a fresh Mac.
 - 0.3.7 (2026-10-22): fix from Mat's run. The app in
   /Volumes/Espirit/testshow (works, no show file) opened the test kit's show
   from the Desktop instead (every file "missing"; Scan merged work1–3 into
@@ -414,7 +414,7 @@ whether 0.2 (two-Mac sync) is published on its own is still Mat's call.
 ### Release 0.3.25 (2026-10-22)
 Pushed with everything since 0.1.1 and published as v0.3.25: the app,
 the test show and the sweep clips. README gained "Running one playlist on
-a triptych" for the uni technician.
+a triptych" for a venue technician.
 
 ### Release 0.1.1 (2026-10-21): first public release, as tableauX
 github.com/psychosophonis/tableauX. A 0.1.0 under the old name ("Multiscreen
@@ -447,8 +447,8 @@ Built from § v5. `swift test`: 220 tests, 1 skipped (the loopback, which needs 
 named device; count checked 2026-11-12).
 
 **First run of the real app (2026-11-05, MacBook Pro, dev build, sound forced to
-the virtual Pro Tools Audio Bridge 16, levels -50 dBFS tones and -40 dBFS clicks,
-because the Mac's default output was a Universal Audio Apollo with monitors on).**
+a virtual 16-channel loopback device, levels -50 dBFS tones and -40 dBFS clicks,
+because the Mac's default output was an interface with monitors live).**
 A throwaway library held mono, dual-mono and real stereo WAVs, plus a video whose
 AAC sound was routed to output 5. Measured at the device's inputs, in Preview and
 in Present alike:
@@ -485,10 +485,9 @@ from its subfolder, and a bake could run twice, once during the show. Not checke
 ear; the pan sliders by hand (drawn, not dragged); a real work's level; whether a
 player's pan edit reaches the conductor outside a test.
 
-### v5: six channels on the Behringer at uni (Mat, reported 2026-11-12)
-First time sound has left a real interface. Mat ran a dev build on the
-university's Behringer: **all six outputs correct**, each source on its own
-output. That retires two of the NOT-checked lines above: sound had never been
+### v5: six channels on a hardware interface (Mat, reported 2026-11-12)
+First time sound has left a real interface. Mat ran a dev build on a six-output
+interface: **all six outputs correct**, each source on its own output. That retires two of the NOT-checked lines above: sound had never been
 measured leaving hardware, and nobody had heard it.
 
 What this run does NOT settle, stated plainly because the targets turn on it:
@@ -502,7 +501,7 @@ What this run does NOT settle, stated plainly because the targets turn on it:
 - Not in this run: two Macs, the fold-down by ear, student exports.
 
 ## v6: getting sound in, after the first interface run (2026-11-12, released as pre-release 0.4.0-beta.2 on 2026-11-13)
-Built from § v6, written this session from Mat's four findings on the Behringer.
+Built from § v6, written this session from Mat's four findings on the interface.
 `swift build && swift test`: **232 tests, 1 skipped (the loopback), 0 failures**
 (220 before; 12 new).
 
@@ -516,7 +515,7 @@ Built from § v6, written this session from Mat's four findings on the Behringer
   saying which speaker really gets what. A file named `_N` still asks for N.
 - **Staggered ring.** "Stagger pairs" gives the sources in table order the pairs
   (o, o+1), (o+1, o+2) … wrapping the last back to the first output: Mat's
-  1-2, 2-3, 3-4, 4-5, 5-6, 6-1, or 3-4 … 8-3 on the Behringer. `AudioRoute.second`
+  1-2, 2-3, 3-4, 4-5, 5-6, 6-1, or 3-4 … 8-3 above a reserved pair. `AudioRoute.second`
   stores the wrap explicitly (optional, so older shows still read).
 - **Mixing instead of a veto.** § v5's "two sources on one output blocks Present"
   is gone: shared outputs are summed, each row says which outputs it shares, and
@@ -524,7 +523,7 @@ Built from § v6, written this session from Mat's four findings on the Behringer
   the fold-down used. The old test asserting the veto was inverted, deliberately.
 - **A player's floor travels with its inventory.** Found by the teaching review,
   not by a test: a conductor invents a player's routes, so a player with a
-  Behringer had its new sound allocated from output 1 — its master pair — because
+  reserved first pair had its new sound allocated from output 1 — that pair — because
   the floor was a purely local setting. `Inventory.firstOutput` (optional, so older
   players still decode) now carries it, and a Mac's own report beats the
   conductor's assumption.
@@ -552,7 +551,7 @@ screens, so the player side is largely there).
 
 **Not run in the app.** Everything here is tested in `swift test` and the probe;
 nothing has been clicked, and the ring has never been heard. The real test is
-Mat's six-pair work through the Behringer, by ear.
+Mat's six-pair work through the array, by ear.
 
 ## Open questions
 - ~~Is building a 2000-segment composition fast enough?~~ Answered by
