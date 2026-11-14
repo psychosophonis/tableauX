@@ -1,8 +1,8 @@
 // PROBE: "a ring of overlapping stereo pairs can be summed into one bake"
 // (docs/architecture.md § v6 › Pairs may overlap, and may wrap; T25, T26).
 //
-// From the first run on a hardware interface (2026-11-12): a work of six stereo pairs wanted
-// the pairs staggered — 1-2, 2-3, 3-4, 4-5, 5-6, 6-1 — each file spread between
+// From the first run on a hardware interface (2026-11-12): a work of six stereo
+// pairs wanted them staggered — 1-2, 2-3, 3-4, 4-5, 5-6, 6-1 — each file between
 // two adjacent speakers, the last wrapping to the first. Every output then
 // carries TWO sources: the right channel of one file and the left of the next.
 // § v5 refused that outright, so before changing the routing rules, this asks
