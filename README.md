@@ -4,12 +4,16 @@
 (latest version, Apple silicon and Intel, macOS 13+). Then see
 [First launch](#first-launch).
 
-**Trying the beta:** [0.4.0-beta.1](../../releases/tag/v0.4.0-beta.1) adds
+**Trying the beta:** [0.4.0-beta.2](../../releases/tag/v0.4.0-beta.2) adds
 multichannel sound without a DAW: a work's files go to the outputs of each
 Mac's interface, a screen's video sound can be routed too, and Stereo fold-down
-lets you check surround work on two speakers. It's for testing, not for shows,
-and hasn't yet been tried on a real interface. Check Interface and turn your
-monitors down before playing: it uses the Mac's default output at full level.
+lets you check surround work on two speakers. Sound files and folders load in
+one selection, a Mac can reserve its first outputs, and stereo pairs can
+overlap and wrap around a ring of speakers. It's for testing, not for shows:
+six outputs of a Behringer interface have played a short sound work correctly,
+but sound against picture, and over hours, is untested. Check Interface and turn
+your monitors down before playing: it uses the Mac's default output at full
+level.
 
 tableauX plays multiscreen video works across any number of displays. A work
 can use the displays on one Mac, or the displays on several Macs, each with
