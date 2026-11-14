@@ -363,7 +363,7 @@ ShowFolder.isShowFolder(files:subfolders:) / .shows(in:) / .showToOpen(last:fold
 ### Riskiest assumption, and its cheapest test
 That the target network gives clock estimates good to a few milliseconds.
 A simulation can't answer this, because the answer depends on that network's
-real delays. The cheapest real test is a probe on two MacBooks on the
+real delays. The cheapest real test is a probe on two MacBooks on
 a managed Wi-Fi network: first check they can reach each other (T10), then log the
 offset estimate over 10 minutes (T11). Only if that holds is the rest worth
 building.

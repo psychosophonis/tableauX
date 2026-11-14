@@ -44,6 +44,33 @@
 // to about a millisecond, small against a 33 ms frame. These runs test the
 // probe, not any network: the real test is two Macs on the real Wi-Fi.
 //
+// WHAT IT TAUGHT (2026-10-21, two MacBooks on a managed Wi-Fi network, ~9 min at
+// 20/s; samples kept in Tests/clock-probe-1792559249.csv). The idea SURVIVED:
+//   T10 pass: 10,618 of 10,638 replies (0.2% lost).
+//   Round trip: median 6.2 ms, 95% 41.4 ms, max 1,350 ms — stalls do happen.
+//   T11 pass: raw offsets 95% within 15.2 ms of the trend; MIN-RTT FILTERED, 0.28 ms.
+//   Clock drift −12 ppm between the two Macs (a 33 ms frame every ~46 min).
+//
+// The lesson is in the gap between those two numbers: 15.2 ms → 0.28 ms, a
+// factor of 54, and nothing in the app earned it — the filter did. It also says
+// why the filter SELECTS a sample rather than averaging: that 1,350 ms round
+// trip would drag any mean badly, while a minimum is immune to outliers in one
+// direction. Network delay can only be added, never subtracted, so the error here
+// is ONE-SIDED, and for one-sided error an order statistic beats a moment. That
+// is the transferable point, and it holds wherever the noise has a floor but no
+// ceiling: latency, queueing, GPS pseudoranges, a stopwatch read by hand.
+//
+// The blind spot named above showed up as predicted in the controls and remains
+// open on the real network: 0.28 ms steady says nothing about being RIGHT, and
+// the one-sided bias pushes the estimate early. T12 (sweep clips across two
+// Macs) is what tests accuracy.
+//
+// This probe's CSV outlived it. `ClockReplayTests` replays these samples through
+// the real `ClockEstimator` — 0.27 ms, and 0.40 ms worst across a simulated
+// 300 s dropout — so a measurement taken once on a network nobody can reproduce
+// became a REGRESSION TEST that runs on any machine. Worth copying: when a probe
+// records real-world data, keep the data, not just the conclusion.
+//
 // The clock read is CLOCK_UPTIME_RAW, the same host clock the app's players
 // follow (mach_absolute_time), so this measures the clock v3 would really use.
 //

@@ -19,8 +19,10 @@
 // steady (every 15 s window read 8.67-8.68). That's a frame at 30 fps every 64 min,
 // or about 250 ms over 8 h.
 // Limits: this measures the Mac's own speakers, not an external interface, and a
-// device's rate is a property of that device — a converter with its own crystal
-// may be faster, slower or (if it is clocked externally) steadier than this.
+// device's rate is a property of that device. So +8.67 ppm is a reading for one
+// device and carries to no other: an external converter runs on its own crystal
+// and could be faster, slower or steadier. That is reasoning from where the
+// crystal sits, NOT measured here — no external device has been read yet.
 // It also shows the clocks differ, not that sound drifts:
 // AVPlayer might correct for it. That needs a test of what actually arrives, on real
 // hardware (Tests/PlayerCoreTests/AudioLoopbackTests.swift, target T23). Not yet run.
